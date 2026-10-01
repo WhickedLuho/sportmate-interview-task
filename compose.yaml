@@ -19,6 +19,9 @@ services:
             IGNITION_LOCAL_SITES_PATH: '${PWD}'
         volumes:
             - '.:/var/www/html'
+            # Keep vendor/ on the container's own disk: loading thousands of PHP files
+            # through the Windows bind mount makes every request take seconds.
+            - 'sail-vendor:/var/www/html/vendor'
         networks:
             - sail
 
@@ -32,11 +35,15 @@ services:
             LARAVEL_SAIL: 1
         volumes:
             - '.:/var/www/html'
+            # Keep vendor/ on the container's own disk: loading thousands of PHP files
+            # through the Windows bind mount makes every request take seconds.
+            - 'sail-vendor:/var/www/html/vendor'
         networks:
             - sail
         depends_on:
             - laravel.test
         restart: unless-stopped
+
     adminer:
         image: 'adminer:5'
         ports:
@@ -55,3 +62,6 @@ services:
 networks:
     sail:
         driver: bridge
+
+volumes:
+    sail-vendor:

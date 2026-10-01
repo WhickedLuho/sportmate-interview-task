@@ -58,6 +58,56 @@ class SyncTarget extends Model
     }
 
     /**
+     * Atomically move the target to "queued", unless a sync is already pending
+     * or running. A single conditional UPDATE means two simultaneous requests
+     * cannot both win, without needing a lock.
+     *
+     * @return bool whether this call claimed the target (and a job should be dispatched)
+     */
+    public function markQueued(): bool
+    {
+        $claimed = static::query()
+            ->whereKey($this->getKey())
+            ->whereNotIn('status', array_map(fn (SyncStatus $status) => $status->value, SyncStatus::inProgress()))
+            ->update(['status' => SyncStatus::Queued, 'updated_at' => now()]) === 1;
+
+        $this->refresh();
+
+        return $claimed;
+    }
+
+    public function markSyncing(): void
+    {
+        $this->update(['status' => SyncStatus::Syncing, 'last_attempted_at' => now()]);
+    }
+
+    public function markSynced(?TargetType $type): void
+    {
+        $this->update([
+            'status' => SyncStatus::Synced,
+            'type' => $type ?? $this->type,
+            'last_synced_at' => now(),
+            'last_error' => null,
+        ]);
+    }
+
+    /** A transient failure: the job will run again, so the target goes back to "queued". */
+    public function markRetrying(string $message): void
+    {
+        $this->update(['status' => SyncStatus::Queued, 'last_error' => $message]);
+    }
+
+    public function markRateLimited(string $message): void
+    {
+        $this->update(['status' => SyncStatus::RateLimited, 'last_error' => $message]);
+    }
+
+    public function markFailed(string $message): void
+    {
+        $this->update(['status' => SyncStatus::Failed, 'last_error' => $message]);
+    }
+
+    /**
      * @return BelongsTo<User, $this>
      */
     public function user(): BelongsTo

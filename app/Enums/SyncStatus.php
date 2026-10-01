@@ -15,9 +15,20 @@ enum SyncStatus: string
     /** GitHub rate limit hit; the job was released and will be retried. */
     case RateLimited = 'rate_limited';
 
+    /**
+     * Statuses in which a job is already pending or running, so requesting
+     * another synchronization would be pointless.
+     *
+     * @return list<self>
+     */
+    public static function inProgress(): array
+    {
+        return [self::Queued, self::Syncing, self::RateLimited];
+    }
+
     /** Whether a new synchronization may be requested from this status. */
     public function canStartSync(): bool
     {
-        return ! in_array($this, [self::Queued, self::Syncing], true);
+        return ! in_array($this, self::inProgress(), true);
     }
 }

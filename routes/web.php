@@ -12,6 +12,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('targets', [SyncTargetController::class, 'index'])->name('targets.index');
     Route::post('targets', [SyncTargetController::class, 'store'])->name('targets.store');
     Route::post('targets/{target}/sync', [SyncTargetController::class, 'sync'])->name('targets.sync');
+    Route::post('targets/{target}/cancel', [SyncTargetController::class, 'cancel'])->name('targets.cancel');
 
     Route::get('repositories', [RepositoryController::class, 'index'])->name('repositories.index');
 });

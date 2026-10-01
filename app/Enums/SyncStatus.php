@@ -26,9 +26,24 @@ enum SyncStatus: string
         return [self::Queued, self::Syncing, self::RateLimited];
     }
 
+    /** Whether a job is pending or running in this status. */
+    public function isInProgress(): bool
+    {
+        return in_array($this, self::inProgress(), true);
+    }
+
     /** Whether a new synchronization may be requested from this status. */
     public function canStartSync(): bool
     {
-        return ! in_array($this, self::inProgress(), true);
+        return ! $this->isInProgress();
+    }
+
+    /**
+     * Whether the user may stop the synchronization. A running request is not interrupted
+     * (it finishes within seconds); only a job that is still waiting can be stopped.
+     */
+    public function canCancel(): bool
+    {
+        return in_array($this, [self::Queued, self::RateLimited], true);
     }
 }

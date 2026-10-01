@@ -62,6 +62,12 @@ _(to be filled in as the work progresses)_
   reconciliation) are not repeated as placeholders. One placeholder documents a known defect in my own code
   (the `LIKE` search does not escape `%` and `_`).
 
+- **Stopping a rate-limited sync.** Triggered by a screenshot of three targets waiting for a rate limit reset
+  with no way to see when or to stop them. Chosen design: cooperative cancellation (the waiting job checks the
+  target on wake-up) instead of deleting the job from the database queue, plus a stored `retry_at` for the UI.
+  The dangerous edge case (stop, then Sync again while the old job still holds the unique lock) has its own test.
+  Decisions on status after stopping (`idle`) and on the scheduler (not disabled) were made by the developer.
+
 ## How generated code was validated
 
 - Starter kit test suite run inside the container (`php artisan test`): 40 passed on the untouched scaffold.

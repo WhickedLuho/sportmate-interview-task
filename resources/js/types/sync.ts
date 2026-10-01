@@ -12,6 +12,8 @@ export type SyncTarget = {
     type: 'user' | 'organization' | null;
     status: SyncStatus;
     can_sync: boolean;
+    can_cancel: boolean;
+    retry_at: string | null;
     last_attempted_at: string | null;
     last_synced_at: string | null;
     last_error: string | null;

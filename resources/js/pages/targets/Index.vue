@@ -8,7 +8,7 @@ import StatusBadge from '@/components/StatusBadge.vue';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { formatDateTime, formatNumber } from '@/lib/format';
+import { formatDateTime, formatNumber, formatTime } from '@/lib/format';
 import { index as repositoriesIndex } from '@/routes/repositories';
 import { index } from '@/routes/targets';
 import type { SyncTarget } from '@/types';
@@ -100,6 +100,14 @@ watch(inProgress, (active) => (active ? start() : stop()), {
                             </td>
                             <td class="px-4 py-3">
                                 <StatusBadge :status="target.status" />
+                                <div
+                                    v-if="target.retry_at"
+                                    class="mt-1 text-xs whitespace-nowrap text-muted-foreground"
+                                    data-test="retry-at"
+                                >
+                                    Retrying at
+                                    {{ formatTime(target.retry_at) }}
+                                </div>
                             </td>
                             <td class="px-4 py-3">
                                 <Link
@@ -133,29 +141,50 @@ watch(inProgress, (active) => (active ? start() : stop()), {
                             >
                                 {{ target.last_error ?? '' }}
                             </td>
-                            <td class="px-4 py-3 text-right">
-                                <Form
-                                    v-bind="
-                                        SyncTargetController.sync.form({
-                                            target: target.id,
-                                        })
-                                    "
-                                    v-slot="{ processing }"
-                                >
-                                    <Button
-                                        type="submit"
-                                        size="sm"
-                                        :disabled="
-                                            !target.can_sync || processing
+                            <td class="px-4 py-3">
+                                <div class="flex justify-end gap-2">
+                                    <Form
+                                        v-if="target.can_cancel"
+                                        v-bind="
+                                            SyncTargetController.cancel.form({
+                                                target: target.id,
+                                            })
                                         "
+                                        v-slot="{ processing }"
                                     >
-                                        {{
-                                            target.can_sync
-                                                ? 'Sync'
-                                                : 'In progress…'
-                                        }}
-                                    </Button>
-                                </Form>
+                                        <Button
+                                            type="submit"
+                                            size="sm"
+                                            variant="outline"
+                                            :disabled="processing"
+                                            data-test="stop-button"
+                                        >
+                                            Stop
+                                        </Button>
+                                    </Form>
+                                    <Form
+                                        v-bind="
+                                            SyncTargetController.sync.form({
+                                                target: target.id,
+                                            })
+                                        "
+                                        v-slot="{ processing }"
+                                    >
+                                        <Button
+                                            type="submit"
+                                            size="sm"
+                                            :disabled="
+                                                !target.can_sync || processing
+                                            "
+                                        >
+                                            {{
+                                                target.can_sync
+                                                    ? 'Sync'
+                                                    : 'In progress…'
+                                            }}
+                                        </Button>
+                                    </Form>
+                                </div>
                             </td>
                         </tr>
                     </tbody>

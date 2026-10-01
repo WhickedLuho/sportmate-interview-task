@@ -79,13 +79,26 @@ class SyncTargetJob implements ShouldBeUnique, ShouldQueue
 
     public function handle(RepositorySyncService $sync): void
     {
+        // The user may have stopped the synchronization while this job was waiting (queued
+        // or paused by a rate limit). Exit without touching GitHub in that case.
+        if (! $this->target->status->isInProgress()) {
+            Log::info('GitHub synchronization skipped: it is no longer pending.', [
+                'sync_target_id' => $this->target->id,
+                'target' => $this->target->name,
+                'status' => $this->target->status->value,
+            ]);
+
+            return;
+        }
+
         try {
             $sync->sync($this->target);
         } catch (GitHubRateLimitedException $e) {
-            $this->target->markRateLimited($e->userMessage());
-
             // A little extra time so we do not wake up exactly at the reset second.
-            $this->release(max(1, (int) now()->diffInSeconds($e->retryAt, false)) + 5);
+            $delay = max(1, (int) now()->diffInSeconds($e->retryAt, false)) + 5;
+
+            $this->target->markRateLimited($e->userMessage(), now()->addSeconds($delay));
+            $this->release($delay);
         } catch (GitHubUnavailableException $e) {
             $this->logFailure($e);
             $this->target->markRetrying($e->userMessage());

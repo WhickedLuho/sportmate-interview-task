@@ -26,11 +26,12 @@ use Illuminate\Support\Carbon;
  * @property SyncStatus $status
  * @property Carbon|null $last_attempted_at
  * @property Carbon|null $last_synced_at
+ * @property Carbon|null $retry_at
  * @property string|null $last_error
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  */
-#[Fillable(['name', 'type', 'status', 'last_attempted_at', 'last_synced_at', 'last_error'])]
+#[Fillable(['name', 'type', 'status', 'last_attempted_at', 'last_synced_at', 'retry_at', 'last_error'])]
 class SyncTarget extends Model
 {
     /** @use HasFactory<SyncTargetFactory> */
@@ -46,6 +47,7 @@ class SyncTarget extends Model
             'status' => SyncStatus::class,
             'last_attempted_at' => 'datetime',
             'last_synced_at' => 'datetime',
+            'retry_at' => 'datetime',
         ];
     }
 
@@ -96,9 +98,32 @@ class SyncTarget extends Model
         return $claimed;
     }
 
+    /**
+     * Stop a synchronization that is still waiting (queued, or paused by a rate limit).
+     *
+     * This does not remove the job from the queue (with the database queue that would mean
+     * searching serialized payloads). The job notices on wake-up that the target is no longer
+     * pending and exits without calling GitHub. If the user starts a new sync before then,
+     * the new dispatch is dropped by the unique lock and the old job simply does the work.
+     *
+     * @return bool whether something was cancelled
+     */
+    public function markCancelled(): bool
+    {
+        $cancelled = static::query()
+            ->whereKey($this->getKey())
+            ->whereIn('status', array_map(fn (SyncStatus $status) => $status->value, [SyncStatus::Queued, SyncStatus::RateLimited]))
+            // Not an error, so there is nothing to show as one.
+            ->update(['status' => SyncStatus::Idle, 'retry_at' => null, 'last_error' => null, 'updated_at' => now()]) === 1;
+
+        $this->refresh();
+
+        return $cancelled;
+    }
+
     public function markSyncing(): void
     {
-        $this->update(['status' => SyncStatus::Syncing, 'last_attempted_at' => now()]);
+        $this->update(['status' => SyncStatus::Syncing, 'last_attempted_at' => now(), 'retry_at' => null]);
     }
 
     public function markSynced(?TargetType $type): void
@@ -107,6 +132,7 @@ class SyncTarget extends Model
             'status' => SyncStatus::Synced,
             'type' => $type ?? $this->type,
             'last_synced_at' => now(),
+            'retry_at' => null,
             'last_error' => null,
         ]);
     }
@@ -114,17 +140,17 @@ class SyncTarget extends Model
     /** A transient failure: the job will run again, so the target goes back to "queued". */
     public function markRetrying(string $message): void
     {
-        $this->update(['status' => SyncStatus::Queued, 'last_error' => $message]);
+        $this->update(['status' => SyncStatus::Queued, 'retry_at' => null, 'last_error' => $message]);
     }
 
-    public function markRateLimited(string $message): void
+    public function markRateLimited(string $message, CarbonInterface $retryAt): void
     {
-        $this->update(['status' => SyncStatus::RateLimited, 'last_error' => $message]);
+        $this->update(['status' => SyncStatus::RateLimited, 'retry_at' => $retryAt, 'last_error' => $message]);
     }
 
     public function markFailed(string $message): void
     {
-        $this->update(['status' => SyncStatus::Failed, 'last_error' => $message]);
+        $this->update(['status' => SyncStatus::Failed, 'retry_at' => null, 'last_error' => $message]);
     }
 
     /**

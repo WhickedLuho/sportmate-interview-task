@@ -154,6 +154,69 @@ class SyncTargetControllerTest extends TestCase
         $this->assertSame(SyncStatus::Queued, $target->refresh()->status);
     }
 
+    public function test_a_waiting_synchronization_can_be_stopped(): void
+    {
+        $user = User::factory()->create();
+        $target = SyncTarget::factory()->for($user)->create([
+            'status' => SyncStatus::RateLimited,
+            'retry_at' => now()->addMinutes(40),
+        ]);
+
+        $this->actingAs($user)->post(route('targets.cancel', $target))
+            ->assertRedirect(route('targets.index'));
+
+        $target->refresh();
+        $this->assertSame(SyncStatus::Idle, $target->status);
+        $this->assertNull($target->retry_at);
+    }
+
+    public function test_stopping_a_target_that_is_not_waiting_changes_nothing(): void
+    {
+        $user = User::factory()->create();
+        $target = SyncTarget::factory()->for($user)->synced()->create();
+
+        $this->actingAs($user)->post(route('targets.cancel', $target))->assertRedirect();
+
+        $this->assertSame(SyncStatus::Synced, $target->refresh()->status);
+    }
+
+    public function test_someone_elses_target_cannot_be_stopped(): void
+    {
+        $target = SyncTarget::factory()->create(['status' => SyncStatus::Queued]);
+
+        $this->actingAs(User::factory()->create())
+            ->post(route('targets.cancel', $target))
+            ->assertNotFound();
+
+        $this->assertSame(SyncStatus::Queued, $target->refresh()->status);
+    }
+
+    public function test_guests_cannot_stop_a_synchronization(): void
+    {
+        $target = SyncTarget::factory()->create(['status' => SyncStatus::Queued]);
+
+        $this->post(route('targets.cancel', $target))->assertRedirect(route('login'));
+    }
+
+    public function test_the_index_exposes_the_retry_time_and_whether_stopping_is_possible(): void
+    {
+        $user = User::factory()->create();
+        SyncTarget::factory()->for($user)->create([
+            'name' => 'limited',
+            'status' => SyncStatus::RateLimited,
+            'retry_at' => now()->addMinutes(30),
+        ]);
+        SyncTarget::factory()->for($user)->synced()->create(['name' => 'done']);
+
+        $this->actingAs($user)->get(route('targets.index'))
+            ->assertInertia(fn (Assert $page) => $page
+                ->where('targets', fn ($targets) => collect($targets)->firstWhere('name', 'limited')['can_cancel'] === true
+                    && collect($targets)->firstWhere('name', 'limited')['retry_at'] !== null
+                    && collect($targets)->firstWhere('name', 'limited')['can_sync'] === false
+                    && collect($targets)->firstWhere('name', 'done')['can_cancel'] === false
+                    && collect($targets)->firstWhere('name', 'done')['retry_at'] === null));
+    }
+
     public function test_someone_elses_target_cannot_be_synced_and_looks_like_it_does_not_exist(): void
     {
         Queue::fake();

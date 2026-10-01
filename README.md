@@ -47,7 +47,7 @@ mail, replace `&amp;` with `&` and open it. (Or mark the user verified from `php
 
 **GitHub rate limit:** without a token GitHub allows only **60 requests per hour** per IP, and a page of 100
 repositories is one request, so large accounts (hundreds of repositories) exhaust it quickly. The sync then
-shows *Rate limited* and resumes by itself when the limit resets. Set `GITHUB_TOKEN` in `.env` (a token without
+shows _Rate limited_ and resumes by itself when the limit resets. Set `GITHUB_TOKEN` in `.env` (a token without
 any scopes is enough for public data, 5,000 requests/hour) and restart the containers:
 
 ```bash
@@ -56,15 +56,15 @@ docker compose restart laravel.test queue scheduler
 
 Useful commands (all inside the containers):
 
-| Task | Command |
-|---|---|
-| Run the tests | `docker compose exec laravel.test php artisan test` |
-| Code style / static analysis | `docker compose exec laravel.test ./vendor/bin/pint` / `./vendor/bin/phpstan analyse` |
-| Frontend checks | `docker compose exec laravel.test npm run check` / `npm run types:check` |
-| Frontend dev server (HMR) | `docker compose exec laravel.test npm run dev` |
-| Queue a sync for all due targets now | `docker compose exec laravel.test php artisan sync:targets` |
-| Worker log | `docker compose logs -f queue` |
-| Add a PHP package | `docker compose exec laravel.test composer require <package>` |
+| Task                                 | Command                                                                               |
+| ------------------------------------ | ------------------------------------------------------------------------------------- |
+| Run the tests                        | `docker compose exec laravel.test php artisan test`                                   |
+| Code style / static analysis         | `docker compose exec laravel.test ./vendor/bin/pint` / `./vendor/bin/phpstan analyse` |
+| Frontend checks                      | `docker compose exec laravel.test npm run check` / `npm run types:check`              |
+| Frontend dev server (HMR)            | `docker compose exec laravel.test npm run dev`                                        |
+| Queue a sync for all due targets now | `docker compose exec laravel.test php artisan sync:targets`                           |
+| Worker log                           | `docker compose logs -f queue`                                                        |
+| Add a PHP package                    | `docker compose exec laravel.test composer require <package>`                         |
 
 **Adminer:** <http://localhost:8089/?sqlite=&username=dev&db=%2Fdata%2Fdatabase.sqlite>, password `dev`
 (development only; it opens the SQLite file read/write).
@@ -88,16 +88,16 @@ SyncTargetController ── markQueued() (atomic claim) ──► SyncTargetJob 
                                                   GitHub API
 ```
 
-| Responsibility | Where |
-|---|---|
-| Routing, validation, authorization | `routes/web.php`, `app/Http/Requests`, `app/Policies/SyncTargetPolicy.php` |
-| Controllers (thin) | `app/Http/Controllers` |
-| GitHub communication, DTO mapping, typed failures | `app/Integrations/GitHub` |
-| Synchronization logic and database writes | `app/Services/RepositorySyncService.php` |
-| Queue behaviour: retries, timeouts, uniqueness | `app/Jobs/SyncTargetJob.php` |
-| Status transitions | `app/Models/SyncTarget.php`, `app/Enums/SyncStatus.php` |
-| Scheduling | `app/Console/Commands/SyncDueTargets.php`, `routes/console.php` |
-| UI | `resources/js/pages/targets`, `resources/js/pages/repositories` |
+| Responsibility                                    | Where                                                                      |
+| ------------------------------------------------- | -------------------------------------------------------------------------- |
+| Routing, validation, authorization                | `routes/web.php`, `app/Http/Requests`, `app/Policies/SyncTargetPolicy.php` |
+| Controllers (thin)                                | `app/Http/Controllers`                                                     |
+| GitHub communication, DTO mapping, typed failures | `app/Integrations/GitHub`                                                  |
+| Synchronization logic and database writes         | `app/Services/RepositorySyncService.php`                                   |
+| Queue behaviour: retries, timeouts, uniqueness    | `app/Jobs/SyncTargetJob.php`                                               |
+| Status transitions                                | `app/Models/SyncTarget.php`, `app/Enums/SyncStatus.php`                    |
+| Scheduling                                        | `app/Console/Commands/SyncDueTargets.php`, `routes/console.php`            |
+| UI                                                | `resources/js/pages/targets`, `resources/js/pages/repositories`            |
 
 A target's status is one of `idle`, `queued`, `syncing`, `synced`, `failed`, `rate_limited`. The last error is
 stored on the target as a **user-safe message**; the technical detail (exception class, message, target id,
@@ -116,28 +116,38 @@ Migrations: `sync_targets` and `repositories` (plus the framework tables).
 
 **Indexes**
 
-| Index | Why |
-|---|---|
-| `sync_targets (user_id, name)` unique | Duplicate prevention, and lookups of one user's targets |
-| `sync_targets (status, last_synced_at)` | Meant for the scheduler's "what is due" scan. In practice that query filters on `last_attempted_at`, so this index is a candidate to change (I would move it to `(status, last_attempted_at)`); with a handful of targets it is irrelevant |
-| `repositories (sync_target_id, external_id)` unique | The upsert conflict target; also joins from a target |
-| `repositories (sync_target_id, stargazers_count)` | "Sort by stars" within the user's targets |
-| `repositories (sync_target_id, external_updated_at)` | "Sort by last updated" (the default order) |
-| `repositories (sync_target_id, language)` | Language filter |
+| Index                                                | Why                                                                                                                                                                                                                                        |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `sync_targets (user_id, name)` unique                | Duplicate prevention, and lookups of one user's targets                                                                                                                                                                                    |
+| `sync_targets (status, last_synced_at)`              | Meant for the scheduler's "what is due" scan. In practice that query filters on `last_attempted_at`, so this index is a candidate to change (I would move it to `(status, last_attempted_at)`); with a handful of targets it is irrelevant |
+| `repositories (sync_target_id, external_id)` unique  | The upsert conflict target; also joins from a target                                                                                                                                                                                       |
+| `repositories (sync_target_id, stargazers_count)`    | "Sort by stars" within the user's targets                                                                                                                                                                                                  |
+| `repositories (sync_target_id, external_updated_at)` | "Sort by last updated" (the default order)                                                                                                                                                                                                 |
+| `repositories (sync_target_id, language)`            | Language filter                                                                                                                                                                                                                            |
 
 Columns I deliberately did **not** index: `full_name` and `description`. The search uses `LIKE '%term%'`, which
 cannot use a B-tree index. A real application would use SQLite FTS5 or, on MySQL/PostgreSQL, full-text indexes.
 
 ## Queue behaviour
 
-| Topic | What is implemented |
-|---|---|
-| Duplicate requests | `markQueued()` is one conditional `UPDATE ... WHERE status NOT IN (queued, syncing, rate_limited)`, so two simultaneous clicks cannot both win. The job is also `ShouldBeUnique` per target, so a duplicate dispatch is dropped. |
-| Overlapping jobs | The unique lock is held while the job is queued **and** running, so one target never syncs twice at once. (`WithoutOverlapping` would only be needed if several different job classes touched the same target.) The lock expires after 2 h (`uniqueFor`), so a crashed worker cannot block a target forever. |
-| Retries | Transient failures (5xx, connection errors) are rethrown: retried after 30 s, then 120 s, at most 3 exceptions (`maxExceptions`). Permanent failures (unknown account, invalid token) are recorded on the target and **not** retried. |
-| Rate limits | The job is `release()`d until GitHub's reset time (from `Retry-After` / `X-RateLimit-Reset`). Releasing does not count against the retry budget; `retryUntil` (2 h) bounds the total. |
-| Timeouts | The job times out after 60 s and fails (`failOnTimeout`). It must stay below the queue connection's `retry_after` (90 s), otherwise a second worker would pick up a job that is still running. Each HTTP call has its own 10 s timeout. |
-| Failed jobs | `failed()` marks the target `failed` with a generic message and logs the exception; the job also lands in `failed_jobs` (`php artisan queue:failed`, `queue:retry`). |
+| Topic              | What is implemented                                                                                                                                                                                                                                                                                          |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Duplicate requests | `markQueued()` is one conditional `UPDATE ... WHERE status NOT IN (queued, syncing, rate_limited)`, so two simultaneous clicks cannot both win. The job is also `ShouldBeUnique` per target, so a duplicate dispatch is dropped.                                                                             |
+| Overlapping jobs   | The unique lock is held while the job is queued **and** running, so one target never syncs twice at once. (`WithoutOverlapping` would only be needed if several different job classes touched the same target.) The lock expires after 2 h (`uniqueFor`), so a crashed worker cannot block a target forever. |
+| Retries            | Transient failures (5xx, connection errors) are rethrown: retried after 30 s, then 120 s, at most 3 exceptions (`maxExceptions`). Permanent failures (unknown account, invalid token) are recorded on the target and **not** retried.                                                                        |
+| Rate limits        | The job is `release()`d until GitHub's reset time (from `Retry-After` / `X-RateLimit-Reset`). Releasing does not count against the retry budget; `retryUntil` (2 h) bounds the total.                                                                                                                        |
+| Timeouts           | The job times out after 60 s and fails (`failOnTimeout`). It must stay below the queue connection's `retry_after` (90 s), otherwise a second worker would pick up a job that is still running. Each HTTP call has its own 10 s timeout.                                                                      |
+| Failed jobs        | `failed()` marks the target `failed` with a generic message and logs the exception; the job also lands in `failed_jobs` (`php artisan queue:failed`, `queue:retry`).                                                                                                                                         |
+
+**Stopping a synchronization.** A target that is `queued` or `rate_limited` shows a **Stop** button, and a
+rate-limited one shows the time it will retry (`retry_at`). Stopping sets the target back to `idle` (a manual stop is
+not an error, so no error is recorded). The job is deliberately **not** removed from the queue (with the database
+queue that would mean searching serialized payloads); instead the job checks on wake-up whether the target is still
+pending and exits without calling GitHub if it is not. If the user presses Sync again before that job wakes up, the
+new dispatch is dropped by the unique lock, and the waiting job finds the target pending again and does the work, so a
+target can never be left `queued` without a job. A request that is already running (`syncing`) is not interrupted;
+it finishes within seconds. Stopping is not a pause: the hourly scheduler will queue the target again once its last
+attempt is older than 55 minutes.
 
 **Deploying and monitoring the worker (not set up here):** run `queue:work` under a process supervisor
 (Supervisor or systemd, or a dedicated container as in `compose.yaml`) with `restart: unless-stopped`, restart it
@@ -162,7 +172,7 @@ Horizon would give this on Redis; with the database queue a scheduled check of `
 ## Reconciliation, transactions and caching
 
 - **Repositories that disappear from GitHub** are flagged (`missing_at`), not deleted, so nothing is lost and the
-  action is reversible. They are hidden in the list unless *Show missing* is ticked, and a repository that comes
+  action is reversible. They are hidden in the list unless _Show missing_ is ticked, and a repository that comes
   back is unflagged. Known compromise: if GitHub ever returned an empty list by mistake, every repository of that
   target would be flagged until the next good sync.
 - **Transaction boundary:** all network I/O happens first, then one short database transaction writes the batch
@@ -185,14 +195,14 @@ status codes (202 for "sync queued", 409 if already running, 429 passthrough wit
 `php artisan test` runs PHPUnit with an in-memory SQLite database. **No test touches the network**
 (`Http::fake()` plus `Http::preventStrayRequests()`).
 
-| Area | What is covered |
-|---|---|
-| Database | unique constraints, name normalization, cascade deletes |
-| GitHub client | payload mapping, pagination, token header, 404, primary and secondary rate limits, 5xx, connection failure, malformed payload |
-| Sync service | create, update without duplicates (`created_at` kept), chunking, reconciliation both ways, isolation between targets, failure leaves data untouched |
-| Job | success, permanent failure, rate limit release, transient rethrow, `failed()`, uniqueness |
-| Controllers | authorization (404 for foreign ids), validation edge cases, atomic claim / no double dispatch, filters, sorting (whitelist), pagination |
-| Scheduler | hourly registration, due selection, the 55-minute boundary, idempotence |
+| Area          | What is covered                                                                                                                                     |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Database      | unique constraints, name normalization, cascade deletes                                                                                             |
+| GitHub client | payload mapping, pagination, token header, 404, primary and secondary rate limits, 5xx, connection failure, malformed payload                       |
+| Sync service  | create, update without duplicates (`created_at` kept), chunking, reconciliation both ways, isolation between targets, failure leaves data untouched |
+| Job           | success, permanent failure, rate limit release, transient rethrow, `failed()`, uniqueness                                                           |
+| Controllers   | authorization (404 for foreign ids), validation edge cases, atomic claim / no double dispatch, filters, sorting (whitelist), pagination             |
+| Scheduler     | hourly registration, due selection, the 55-minute boundary, idempotence                                                                             |
 
 Planned but not written test cases are listed as skipped placeholders in `tests/Feature/Planned`.
 

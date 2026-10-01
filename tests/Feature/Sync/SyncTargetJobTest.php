@@ -68,6 +68,46 @@ class SyncTargetJobTest extends TestCase
         $target->refresh();
         $this->assertSame(SyncStatus::RateLimited, $target->status);
         $this->assertStringContainsString('rate limit', $target->last_error);
+        $this->assertEqualsWithDelta(now()->addMinutes(10)->timestamp + 5, $target->retry_at->timestamp, 3, 'The shown retry time matches when the job wakes up.');
+    }
+
+    public function test_a_job_that_wakes_up_after_the_user_stopped_it_does_nothing(): void
+    {
+        $target = SyncTarget::factory()->create(['name' => 'laravel', 'status' => SyncStatus::RateLimited]);
+        $target->markCancelled();
+        Http::preventStrayRequests();
+        Http::fake();
+
+        $job = $this->runJob($target->refresh());
+
+        $job->assertNotReleased()->assertNotFailed();
+        Http::assertNothingSent();
+        $this->assertSame(SyncStatus::Idle, $target->refresh()->status);
+        $this->assertSame(0, $target->repositories()->count());
+    }
+
+    public function test_syncing_again_after_stopping_is_picked_up_by_the_job_that_is_still_waiting(): void
+    {
+        Queue::fake();
+        $target = SyncTarget::factory()->create(['name' => 'laravel']);
+
+        // First request: the job is queued (and holds the unique lock), then the user stops it.
+        $this->assertTrue($target->markQueued());
+        SyncTargetJob::dispatch($target);
+        $this->assertTrue($target->markCancelled());
+
+        // The user changes their mind before the waiting job wakes up. The dispatch is dropped
+        // by the unique lock, so the target must not be left "queued" without a job...
+        $this->assertTrue($target->markQueued());
+        SyncTargetJob::dispatch($target);
+        Queue::assertPushed(SyncTargetJob::class, 1);
+
+        // ...because the job that is still waiting finds the target pending again and does the work.
+        $this->fakeGitHubRepositories([$this->githubRepository()]);
+        $this->runJob($target->refresh());
+
+        $this->assertSame(SyncStatus::Synced, $target->refresh()->status);
+        $this->assertSame(1, $target->repositories()->count());
     }
 
     public function test_a_transient_failure_is_rethrown_so_the_queue_retries(): void

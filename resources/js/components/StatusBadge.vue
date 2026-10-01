@@ -35,7 +35,7 @@ const presentation = computed(() => {
             };
         default:
             return {
-                label: 'Not synced yet',
+                label: 'Idle',
                 variant: 'secondary' as const,
                 class: '',
             };

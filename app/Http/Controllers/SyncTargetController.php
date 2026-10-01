@@ -57,4 +57,20 @@ class SyncTargetController extends Controller
 
         return to_route('targets.index');
     }
+
+    /**
+     * Stop a synchronization that has not started yet (queued, or waiting for a rate limit).
+     */
+    public function cancel(SyncTarget $target): RedirectResponse
+    {
+        Gate::authorize('manage', $target);
+
+        if ($target->markCancelled()) {
+            Inertia::flash('toast', ['type' => 'success', 'message' => __('Synchronization stopped.')]);
+        } else {
+            Inertia::flash('toast', ['type' => 'info', 'message' => __('There is no waiting synchronization to stop.')]);
+        }
+
+        return to_route('targets.index');
+    }
 }

@@ -41,6 +41,13 @@ _(to be filled in as the work progresses)_
   fake inside one test was silently ignored (5 failures that looked like service bugs but were test bugs);
   fixed with a `fakeGitHub()` helper that resets the fake. Also a wrong `PromiseInterface` import in the helper.
 
+- **Wayfinder generation.** Running `php artisan wayfinder:generate` by hand overwrote the generated route
+  helpers without the `.form()` variants that `vite.config.ts` enables (`formVariants: true`), which broke
+  type-checking across the starter kit. Regenerated with `--with-form`.
+- **Authorization.** Other users' targets answer 404 (`Response::denyAsNotFound()`), not 403, so ids cannot be probed.
+- **Sorting.** The sort key from the query string is mapped through a whitelist; a PHPStan finding made the
+  direction type explicit (`'asc'|'desc'`).
+
 ## How generated code was validated
 
 - Starter kit test suite run inside the container (`php artisan test`): 40 passed on the untouched scaffold.
@@ -48,4 +55,8 @@ _(to be filled in as the work progresses)_
 - Real end-to-end check with the Docker queue worker against the live GitHub API: two dispatches produced one
   job, the sync stored 8 repositories and detected the account type, and an unknown account ended as `failed`
   with a friendly message while the raw exception only reached the log. Temporary rows were removed afterwards.
-- _(UI checks in the browser to be added)_
+- Controller tests (authorization, validation, filters, sorting, pagination) and Inertia prop assertions.
+- UI checked in a real browser against the running stack with a throwaway user (deleted afterwards):
+  validation error display, adding a target, Sync button -> worker -> "Synced" with 8 repositories,
+  debounced search, sortable column headers, and URLs that reflect the filter state.
+  Requests take ~4s on this Windows bind-mount setup, which first made my scripted checks look like failures.

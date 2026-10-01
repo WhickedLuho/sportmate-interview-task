@@ -55,6 +55,13 @@ _(to be filled in as the work progresses)_
 - **Command style.** Used `$signature`/`$description` properties like the existing command rather than the
   newer attributes I first wrote, to match the surrounding code.
 
+- **README setup steps were verified, not assumed.** I followed them literally on a fresh `git clone` (separate
+  Compose project and ports): it exposed that the web server cannot start while `vendor/` is still empty and
+  needs one restart, which the first draft of the README did not say.
+- **Placeholder tests list real gaps only.** Cases that are already covered (pagination, rate limit release,
+  reconciliation) are not repeated as placeholders. One placeholder documents a known defect in my own code
+  (the `LIKE` search does not escape `%` and `_`).
+
 ## How generated code was validated
 
 - Starter kit test suite run inside the container (`php artisan test`): 40 passed on the untouched scaffold.

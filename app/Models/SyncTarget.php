@@ -4,8 +4,11 @@ namespace App\Models;
 
 use App\Enums\SyncStatus;
 use App\Enums\TargetType;
+use Carbon\CarbonInterface;
 use Database\Factories\SyncTargetFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Attributes\Scope;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -55,6 +58,23 @@ class SyncTarget extends Model
     protected function name(): Attribute
     {
         return Attribute::set(fn (string $value) => strtolower(trim($value)));
+    }
+
+    /**
+     * Targets that are due for a scheduled synchronization: nothing is pending or running
+     * for them and the last attempt (successful or not) is older than the given moment.
+     * A target that was never attempted is always due.
+     *
+     * @param  Builder<SyncTarget>  $query
+     */
+    #[Scope]
+    protected function due(Builder $query, CarbonInterface $attemptedBefore): void
+    {
+        $query
+            ->whereNotIn('status', array_map(fn (SyncStatus $status) => $status->value, SyncStatus::inProgress()))
+            ->where(fn (Builder $query) => $query
+                ->whereNull('last_attempted_at')
+                ->orWhere('last_attempted_at', '<=', $attemptedBefore));
     }
 
     /**

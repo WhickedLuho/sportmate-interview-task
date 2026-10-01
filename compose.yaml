@@ -44,6 +44,23 @@ services:
             - laravel.test
         restart: unless-stopped
 
+    scheduler:
+        image: 'sail-8.4/app'
+        command: php artisan schedule:work
+        extra_hosts:
+            - 'host.docker.internal:host-gateway'
+        environment:
+            WWWUSER: '${WWWUSER}'
+            LARAVEL_SAIL: 1
+        volumes:
+            - '.:/var/www/html'
+            - 'sail-vendor:/var/www/html/vendor'
+        networks:
+            - sail
+        depends_on:
+            - laravel.test
+        restart: unless-stopped
+
     adminer:
         image: 'adminer:5'
         ports:

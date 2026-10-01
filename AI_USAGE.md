@@ -48,6 +48,13 @@ _(to be filled in as the work progresses)_
 - **Sorting.** The sort key from the query string is mapped through a whitelist; a PHPStan finding made the
   direction type explicit (`'asc'|'desc'`).
 
+- **Scheduled sync threshold.** A due check of "last attempt older than 60 minutes" would skip a target by a
+  whole extra hour (the previous run started a few seconds past the hour, so it is always just under 60
+  minutes old at the next tick). Uses 55 minutes and has a test for exactly that boundary. One of my own
+  assertions in that test was meaningless (`55 + 1 < 60`) and was replaced after review.
+- **Command style.** Used `$signature`/`$description` properties like the existing command rather than the
+  newer attributes I first wrote, to match the surrounding code.
+
 ## How generated code was validated
 
 - Starter kit test suite run inside the container (`php artisan test`): 40 passed on the untouched scaffold.
@@ -55,6 +62,12 @@ _(to be filled in as the work progresses)_
 - Real end-to-end check with the Docker queue worker against the live GitHub API: two dispatches produced one
   job, the sync stored 8 repositories and detected the account type, and an unknown account ended as `failed`
   with a friendly message while the raw exception only reached the log. Temporary rows were removed afterwards.
+- Scheduled sync: tests for the due selection, the hourly registration and double-run idempotence. A live run
+  also showed the rate limit handling working for real: with large accounts (hundreds of repositories) added
+  through the UI and no token, targets went to `rate_limited` and were released instead of failing.
+  Mistake worth noting: I ran the command against the developer's real database without re-checking for
+  data added since my last check, so it queued their targets as well (no data lost, but it should have been
+  tested in an isolated database).
 - Controller tests (authorization, validation, filters, sorting, pagination) and Inertia prop assertions.
 - UI checked in a real browser against the running stack with a throwaway user (deleted afterwards):
   validation error display, adding a target, Sync button -> worker -> "Synced" with 8 repositories,

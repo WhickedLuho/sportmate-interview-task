@@ -24,6 +24,14 @@ _(to be filled in as the work progresses)_
 - **Test database.** `sail:install` rewrote `phpunit.xml` to a file-based `testing` database. I reverted it
   to the starter kit's in-memory SQLite, which is faster and isolated.
 
+- **Target type.** The first plan had the user choose "user" or "organization". Changed so the type is
+  discovered from the GitHub payload (`owner.type`), saving the user a choice and us an extra API request.
+- **Pagination.** Instead of following the `Link` header's URLs (which would send the token to whatever host
+  the header names), the client requests `page=N` against the configured base URL and only uses the header
+  to learn whether another page exists.
+- **Adminer login.** The AI-written plugin file was saved with a UTF-8 BOM by Windows PowerShell, which broke
+  Adminer's headers. Found by testing in the browser; the same BOM was then removed from `compose.yaml`.
+
 ## How generated code was validated
 
 - Starter kit test suite run inside the container (`php artisan test`): 40 passed on the untouched scaffold.

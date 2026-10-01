@@ -28,6 +28,15 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    'github' => [
+        'base_url' => env('GITHUB_API_URL', 'https://api.github.com'),
+        // Optional: unauthenticated requests are limited to 60 per hour per IP,
+        // authenticated ones to 5,000 per hour.
+        'token' => env('GITHUB_TOKEN'),
+        'timeout' => 10,
+        'connect_timeout' => 5,
+    ],
+
     'slack' => [
         'notifications' => [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),

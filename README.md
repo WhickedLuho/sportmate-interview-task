@@ -135,7 +135,7 @@ cannot use a B-tree index. A real application would use SQLite FTS5 or, on MySQL
 | Duplicate requests | `markQueued()` is one conditional `UPDATE ... WHERE status NOT IN (queued, syncing, rate_limited)`, so two simultaneous clicks cannot both win. The job is also `ShouldBeUnique` per target, so a duplicate dispatch is dropped.                                                                             |
 | Overlapping jobs   | The unique lock is held while the job is queued **and** running, so one target never syncs twice at once. (`WithoutOverlapping` would only be needed if several different job classes touched the same target.) The lock expires after 2 h (`uniqueFor`), so a crashed worker cannot block a target forever. |
 | Retries            | Transient failures (5xx, connection errors) are rethrown: retried after 30 s, then 120 s, at most 3 exceptions (`maxExceptions`). Permanent failures (unknown account, invalid token) are recorded on the target and **not** retried.                                                                        |
-| Rate limits        | The job is `release()`d until GitHub's reset time (from `Retry-After` / `X-RateLimit-Reset`). Releasing does not count against the retry budget; `retryUntil` (2 h) bounds the total.                                                                                                                        |
+| Rate limits        | The job is released until GitHub reset plus 5 seconds, only if that time is before the original 2-hour queue deadline. Otherwise the target fails with a safe message and permits a new sync. Releases do not consume maxExceptions. |
 | Timeouts           | The job times out after 60 s and fails (`failOnTimeout`). It must stay below the queue connection's `retry_after` (90 s), otherwise a second worker would pick up a job that is still running. Each HTTP call has its own 10 s timeout.                                                                      |
 | Failed jobs        | `failed()` marks the target `failed` with a generic message and logs the exception; the job also lands in `failed_jobs` (`php artisan queue:failed`, `queue:retry`).                                                                                                                                         |
 
@@ -168,6 +168,14 @@ Horizon would give this on Redis; with the database queue a scheduled check of `
   the repositories' `owner.type`, saving a request.
 - `open_issues_count` is GitHub's number and **includes open pull requests**.
 - The client does not retry; retry and back-off policy belongs to the queued job.
+- Responses must be JSON lists of objects. Consumed fields are validated before persistence: positive integer
+  repository ids, nonempty names, HTTP(S) URLs, typed optional values and valid timestamps. A malformed item or
+  later page fails the whole sync with a safe message; existing rows and the last successful sync time are preserved.
+
+Rate-limit releases use the reset time plus a 5-second buffer and do not consume `maxExceptions`. The next attempt
+must be strictly before the original queue payload's 2-hour `retryUntil`. Otherwise the target becomes `failed`,
+clears `retry_at` and allows a new manual sync. This handled failure is recorded on the target, without a
+`failed_jobs` entry. Releases still increment the queue attempt counter.
 
 ## Reconciliation, transactions and caching
 
@@ -205,6 +213,11 @@ status codes (202 for "sync queued", 409 if already running, 429 passthrough wit
 | Scheduler     | hourly registration, due selection, the 55-minute boundary, idempotence                                                                             |
 
 Planned but not written test cases are listed as skipped placeholders in `tests/Feature/Planned`.
+
+`tests/Unit` contains isolated PHPUnit tests for DTO validation, database-field mapping, optional defaults, GitHub
+account types and synchronization status controls; these do not boot Laravel or use a database. Regression tests
+also cover object-vs-list JSON, malformed later pages preserving stored data, and retry boundaries against actual
+database-queue payloads, including release and a successful second run. A separate worker process is not exercised.
 
 ## Compromises and what I would do next
 

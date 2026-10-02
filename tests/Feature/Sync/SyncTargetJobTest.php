@@ -8,8 +8,10 @@ use App\Jobs\SyncTargetJob;
 use App\Models\SyncTarget;
 use App\Services\RepositorySyncService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Tests\Concerns\FakesGitHub;
 use Tests\TestCase;
@@ -170,5 +172,54 @@ class SyncTargetJobTest extends TestCase
         SyncTargetJob::dispatch(SyncTarget::factory()->create());
 
         Queue::assertPushed(SyncTargetJob::class, 2);
+    }
+
+    /** @return array<string, array{int, bool}> */
+    public static function retryBoundaries(): array
+    {
+        return [
+            'one second before deadline including buffer' => [594, true],
+            'exactly at deadline including buffer' => [595, false],
+            'one second after deadline' => [596, false],
+            'reset before deadline but buffer exceeds it' => [598, false],
+            'within a fresh window but beyond original deadline' => [3600, false],
+        ];
+    }
+
+    #[DataProvider('retryBoundaries')]
+    public function test_rate_limit_release_respects_the_original_queue_payload_deadline(int $resetDelay, bool $shouldRelease): void
+    {
+        $this->freezeTime();
+        $target = SyncTarget::factory()->create(['name' => 'laravel', 'status' => SyncStatus::Queued]);
+        $queue = Queue::connection('database');
+        $queue->push(new SyncTargetJob($target));
+        $deadline = now()->addHours(2)->timestamp;
+        $this->travel(110)->minutes();
+        $this->fakeGitHub(Http::response([], 429, ['Retry-After' => (string) $resetDelay]));
+
+        $queuedJob = $queue->pop();
+        $this->assertNotNull($queuedJob);
+        $this->assertSame($deadline, $queuedJob->retryUntil());
+        $queuedJob->fire();
+
+        $target->refresh();
+        $this->assertSame($shouldRelease, $queuedJob->isReleased());
+        if ($shouldRelease) {
+            $this->assertSame(SyncStatus::RateLimited, $target->status);
+            $this->assertSame(now()->addSeconds($resetDelay + 5)->timestamp, $target->retry_at->timestamp);
+            $payload = json_decode(DB::table('jobs')->sole()->payload, true, flags: JSON_THROW_ON_ERROR);
+            $this->assertSame($deadline, $payload['retryUntil'], 'Release preserves the original deadline.');
+
+            $this->travel($resetDelay + 5)->seconds();
+            $this->fakeGitHubRepositories([$this->githubRepository()]);
+            $queue->pop()->fire();
+            $this->assertSame(SyncStatus::Synced, $target->refresh()->status);
+        } else {
+            $this->assertSame(SyncStatus::Failed, $target->status);
+            $this->assertNull($target->retry_at);
+            $this->assertTrue($target->status->canStartSync());
+            $this->assertStringContainsString('retry window', $target->last_error);
+        }
+        $this->assertSame(0, DB::table('jobs')->count());
     }
 }

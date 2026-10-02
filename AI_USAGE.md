@@ -2,7 +2,7 @@
 
 ## Tools used and scope
 
-**OpenAI Codex** prepared this disclosure and reviewed the assignment, application source, commit history, test coverage and configuration. This review changed documentation only.
+**OpenAI Codex** prepared this disclosure and reviewed the assignment, application source, commit history, test coverage and configuration. The initial review changed documentation only. A later implementation pass added strict GitHub response validation, rate-limit retry-deadline checks and regression/unit tests under my direction.
 
 **Claude Code** assisted with application development in small, explained blocks, including planning, implementation, tests, local setup and troubleshooting. AI assistance was substantial rather than limited to autocomplete.
 
@@ -23,6 +23,8 @@ The following summarizes the instructions and decisions recorded in the developm
 - For the later waiting-sync improvement, show the rate-limit retry time and allow stopping waiting work. The development notes explicitly attribute the choice of `idle` after stopping, and keeping scheduled synchronization enabled, to the developer.
 
 For this documentation review, I instructed Codex to inspect the code and development commits, write a traceable disclosure and leave the code unchanged.
+
+For the later implementation pass, I asked for a plan to fix response validation and retry deadlines and add meaningful unit tests, then approved that plan. Codex edited `GitHubClient`, `RepositoryData`, `SyncTargetJob`, the relevant feature tests, isolated DTO/enum unit tests and this documentation. The starter unit example was replaced with tests of actual application behaviour.
 
 ## Development blocks and substantially AI-generated areas
 
@@ -69,7 +71,7 @@ The repository contains PHPUnit tests using in-memory SQLite, `RefreshDatabase`,
 
 Additional completed tests cover database constraints, mapping and pagination, token headers, GitHub failures, updates preserving `created_at`, chunked persistence, missing repositories returning, separation between targets, job failure handling, rate-limit release, duplicate dispatch, cancellation, authorization, filters, sorting, pagination and scheduled selection.
 
-Most custom tests are in `tests/Feature/`, including client and service tests. `tests/Unit/` currently contains only the starter kit's example test; a separate custom unit-test suite has not been added. Queue tests use fakes and direct handler calls, so they do not prove every behaviour of a real worker.
+Most integration tests are in `tests/Feature/`, including client and service tests. `tests/Unit/` now tests DTO validation/mapping/defaults and enum behaviour without booting Laravel or accessing a database. Retry-boundary tests serialize jobs through the actual database queue, read its original deadline and exercise release and a successful second run. These checks do not launch a separate worker process or prove every worker behaviour.
 
 The development notes record running PHPUnit, Pint and PHPStan during the implementation. The project also provides frontend formatting/lint and Vue TypeScript checks. Reproducible verification commands are:
 
@@ -92,6 +94,19 @@ Those are historical development records, not checks repeated by Codex for this 
 
 Codex compared the assignment, all 11 development commits, current feature code, test coverage and configuration. Runtime checks could not be repeated because the local Docker engine was unavailable. No fresh test-pass count, production-build success or browser verification is claimed here.
 
+### Later implementation validation (2026-10-02)
+
+Docker was available for this pass. Codex ran the complete PHPUnit suite: **167 passed, 11 skipped, 632 assertions**.
+Pint checked all 94 PHP files successfully, and PHPStan reported no errors. Git diff whitespace checks also passed.
+All GitHub responses in the new tests were faked; no live API requests were needed. The changed PHP code was
+tested without changing the development database. Frontend build and browser checks were not repeated for this
+backend-only change.
+
+The response-validation fix preserves JSON object/list distinctions and rejects invalid consumed DTO fields before
+any upsert or missing-repository reconciliation. The retry fix reads the deadline already serialized by Laravel,
+including the 5-second reset buffer, instead of calculating a fresh deadline from `retryUntil()`. Boundary tests
+exercise real database-queue serialization and release, but do not launch a separate worker process.
+
 ## Remaining limits and responsibility
 
 The code and README document compromises rather than treating AI-generated output as production-ready. In particular:
@@ -100,7 +115,7 @@ The code and README document compromises rather than treating AI-generated outpu
 - There is no stuck-target recovery or synchronization-run history. The status claim and queue dispatch are separate operations, so a dispatch failure can leave a target queued without work.
 - Search currently treats `%` and `_` as SQL `LIKE` wildcards; the skipped test documents this gap.
 - The scheduler filters on `last_attempted_at`, while its existing composite index uses `last_synced_at`.
-- Repository DTO mapping assumes expected required fields. The client checks that the decoded payload is an array, but does not strictly validate a JSON list or every item.
+- Syntactically valid but incorrect GitHub data cannot be detected in every case: for example, a valid empty list still means that all previously stored repositories are missing. Malformed JSON, non-list responses and invalid consumed fields now fail without reconciliation.
 - Stopping waiting work does not interrupt a running request or disable future scheduled synchronization.
 
 Approximate implementation time is still unspecified in the README. Commit timestamps are not a measure of active work and cannot establish compliance with the assignment's eight-hour limit.

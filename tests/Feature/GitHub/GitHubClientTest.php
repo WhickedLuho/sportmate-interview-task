@@ -11,6 +11,7 @@ use App\Integrations\GitHub\GitHubClient;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 class GitHubClientTest extends TestCase
@@ -198,5 +199,28 @@ class GitHubClientTest extends TestCase
     public function test_user_messages_do_not_leak_technical_details(): void
     {
         $this->assertStringNotContainsString('404', (new GitHubNotFoundException('GitHub returned 404 for [/users/x/repos].'))->userMessage());
+    }
+
+    /** @return array<string, array{string}> */
+    public static function invalidPayloads(): array
+    {
+        return [
+            'empty object' => ['{}'],
+            'numeric object keys' => ['{"0":{"id":1}}'],
+            'malformed JSON' => ['[{'],
+            'null' => ['null'],
+            'scalar item' => ['[42]'],
+            'list item' => ['[[]]'],
+            'missing required fields' => ['[{}]'],
+        ];
+    }
+
+    #[DataProvider('invalidPayloads')]
+    public function test_invalid_json_lists_and_items_are_rejected(string $body): void
+    {
+        Http::fake([self::URL => Http::response($body, 200, ['Content-Type' => 'application/json'])]);
+        $this->expectException(GitHubException::class);
+
+        $this->client()->repositories('laravel');
     }
 }

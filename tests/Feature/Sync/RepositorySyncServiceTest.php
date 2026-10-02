@@ -5,11 +5,13 @@ namespace Tests\Feature\Sync;
 use App\Enums\SyncStatus;
 use App\Enums\TargetType;
 use App\Integrations\GitHub\Exceptions\GitHubUnavailableException;
+use App\Jobs\SyncTargetJob;
 use App\Models\Repository;
 use App\Models\SyncTarget;
 use App\Services\RepositorySyncService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\Concerns\FakesGitHub;
 use Tests\TestCase;
 
@@ -137,5 +139,41 @@ class RepositorySyncServiceTest extends TestCase
         }
 
         $this->assertNull(Repository::query()->sole()->missing_at, 'A failed sync must not flag repositories as missing.');
+    }
+
+    /** @return array<string, array{string}> */
+    public static function invalidSyncResponses(): array
+    {
+        return [
+            'object instead of empty list' => ['{}'],
+            'invalid field on later page' => ['[{"id":"2","name":"bad"}]'],
+        ];
+    }
+
+    #[DataProvider('invalidSyncResponses')]
+    public function test_invalid_responses_do_not_modify_repositories_or_last_success(string $body): void
+    {
+        $target = SyncTarget::factory()->create(['name' => 'laravel']);
+        $this->fakeGitHubRepositories([$this->githubRepository()]);
+        $this->sync($target);
+        $lastSuccess = $target->refresh()->last_synced_at;
+        $before = $target->repositories()->sole()->getAttributes();
+        $this->travel(1)->hour();
+        $target->markQueued();
+
+        $this->fakeGitHub(Http::sequence()
+            ->push([$this->githubRepository(1, 'renamed', ['stargazers_count' => 999])], 200, ['Link' => '<https://api.github.com/x?page=2>; rel="next"'])
+            ->push($body, 200, ['Content-Type' => 'application/json']));
+
+        $job = (new SyncTargetJob($target))->withFakeQueueInteractions();
+        $job->handle($this->app->make(RepositorySyncService::class));
+
+        $job->assertNotReleased();
+        Http::assertSentCount(2);
+        $this->assertSame($before, $target->repositories()->sole()->getAttributes());
+        $this->assertTrue($target->refresh()->last_synced_at->equalTo($lastSuccess));
+        $this->assertSame(SyncStatus::Failed, $target->status);
+        $this->assertNull($target->retry_at);
+        $this->assertSame('GitHub returned an unexpected response.', $target->last_error);
     }
 }

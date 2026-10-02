@@ -24,8 +24,8 @@ class PlannedTest extends TestCase
     public function test_a_rate_limited_job_resumes_after_the_reset_time_and_finishes_the_sync(): void
     {
         $this->markTestSkipped(
-            'End-to-end with travel(): first run hits the limit and is released, the second run after the reset '
-            .'succeeds, and the target ends up synced without using a retry. Today only the release is asserted.'
+            'Database queue payload, release, preserved deadline and a successful second run are tested in '
+            .'SyncTargetJobTest. Still needs a separate worker process to verify timed pickup end to end.'
         );
     }
 

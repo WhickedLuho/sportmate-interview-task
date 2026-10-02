@@ -12,6 +12,8 @@ use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
+use JsonException;
+use stdClass;
 
 /**
  * The only class that talks HTTP to GitHub.
@@ -61,14 +63,27 @@ class GitHubClient
                 'page' => $page,
             ]);
 
-            $items = $response->json();
-
-            if (! is_array($items)) {
-                throw new GitHubException('GitHub returned a non-list repositories payload.');
+            try {
+                // Preserve JSON objects: {} and {"0": {...}} must never become lists.
+                $items = json_decode($response->body(), associative: false, flags: JSON_THROW_ON_ERROR);
+            } catch (JsonException $e) {
+                throw new GitHubException("GitHub returned invalid JSON on page {$page}.", previous: $e);
             }
 
-            foreach ($items as $item) {
-                $repositories[] = RepositoryData::fromApi($item);
+            if (! is_array($items)) {
+                throw new GitHubException("GitHub returned a non-list repositories payload on page {$page}.");
+            }
+
+            foreach ($items as $index => $item) {
+                if (! $item instanceof stdClass) {
+                    throw new GitHubException("GitHub returned a non-object repository on page {$page}, item {$index}.");
+                }
+
+                try {
+                    $repositories[] = RepositoryData::fromApi(get_object_vars($item));
+                } catch (GitHubException $e) {
+                    throw new GitHubException("Invalid repository on page {$page}, item {$index}: ".$e->getMessage(), previous: $e);
+                }
             }
 
             if (! $this->hasNextPage($response)) {

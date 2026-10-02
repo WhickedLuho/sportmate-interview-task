@@ -40,7 +40,7 @@ class SyncTargetJob implements ShouldBeUnique, ShouldQueue
 
     /**
      * Only exceptions count towards this limit; releasing the job because of a rate
-     * limit does not use an attempt, so a long rate limit cannot exhaust the retries.
+     * limit increments attempts but does not use this exception budget.
      */
     public int $maxExceptions = 3;
 
@@ -96,8 +96,19 @@ class SyncTargetJob implements ShouldBeUnique, ShouldQueue
         } catch (GitHubRateLimitedException $e) {
             // A little extra time so we do not wake up exactly at the reset second.
             $delay = max(1, (int) now()->diffInSeconds($e->retryAt, false)) + 5;
+            $retryAt = now()->addSeconds($delay);
+            // Laravel fixes this timestamp in the queue payload at dispatch. Calling
+            // our retryUntil() here would incorrectly start a fresh two-hour window.
+            $deadline = $this->job?->retryUntil();
 
-            $this->target->markRateLimited($e->userMessage(), now()->addSeconds($delay));
+            if ($deadline !== null && $retryAt->timestamp >= $deadline) {
+                $this->logFailure($e);
+                $this->target->markFailed('GitHub rate limit would exceed the synchronization retry window. Please start a new synchronization later.');
+
+                return;
+            }
+
+            $this->target->markRateLimited($e->userMessage(), $retryAt);
             $this->release($delay);
         } catch (GitHubUnavailableException $e) {
             $this->logFailure($e);

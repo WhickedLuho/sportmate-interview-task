@@ -106,6 +106,15 @@ class GitHubClientTest extends TestCase
         $this->assertSame([], $this->client()->repositories('laravel'));
     }
 
+    public function test_one_page_returns_the_next_flag_without_fetching_another_page(): void
+    {
+        Http::fake([self::URL => Http::response([$this->payload()], 200, ['Link' => '<https://api.github.com/x?page=2>; rel="next"'])]);
+        $page = $this->client()->repositoriesPage('laravel', 1);
+        $this->assertTrue($page->hasNextPage);
+        $this->assertCount(1, $page->repositories);
+        Http::assertSentCount(1);
+    }
+
     public function test_it_sends_the_token_only_when_configured(): void
     {
         Http::fake([self::URL => Http::response([])]);

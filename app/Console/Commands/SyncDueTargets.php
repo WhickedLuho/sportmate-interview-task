@@ -2,16 +2,16 @@
 
 namespace App\Console\Commands;
 
-use App\Jobs\SyncTargetJob;
 use App\Models\SyncTarget;
+use App\Services\SyncDispatchService;
 use Illuminate\Console\Command;
 
 /**
  * Queues a synchronization for every target that has not been attempted recently.
  *
  * Scheduled hourly (see routes/console.php). Repository data (stars, issues, activity)
- * changes slowly, and an hourly cycle stays far below GitHub's 60 requests/hour limit
- * for unauthenticated use, even with several paginated accounts.
+ * changes slowly. Quota usage still depends on the total pages across targets;
+ * large accounts require a token even with an hourly cycle.
  *
  * It only queues work; the same queue, retry and rate limit handling as a manual
  * synchronization applies.
@@ -39,17 +39,16 @@ class SyncDueTargets extends Command
      */
     public const DUE_AFTER_MINUTES = 55;
 
-    public function handle(): int
+    public function handle(SyncDispatchService $dispatch): int
     {
         $queued = 0;
 
         SyncTarget::query()
             ->due(now()->subMinutes(self::DUE_AFTER_MINUTES))
-            ->each(function (SyncTarget $target) use (&$queued) {
+            ->each(function (SyncTarget $target) use (&$queued, $dispatch) {
                 // The same atomic claim as the manual button: if the user started a sync
                 // between our query and now, nothing is dispatched twice.
-                if ($target->markQueued()) {
-                    SyncTargetJob::dispatch($target);
+                if ($dispatch->startOrResume($target)) {
                     $queued++;
                 }
             });

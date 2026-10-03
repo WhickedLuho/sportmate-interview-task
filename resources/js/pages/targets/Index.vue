@@ -101,6 +101,16 @@ watch(inProgress, (active) => (active ? start() : stop()), {
                             <td class="px-4 py-3">
                                 <StatusBadge :status="target.status" />
                                 <div
+                                    v-if="
+                                        target.pages_saved !== null &&
+                                        target.pages_saved > 0
+                                    "
+                                    class="mt-1 text-xs text-muted-foreground"
+                                    data-test="sync-progress"
+                                >
+                                    {{ target.pages_saved }} pages saved
+                                </div>
+                                <div
                                     v-if="target.retry_at"
                                     class="mt-1 text-xs whitespace-nowrap text-muted-foreground"
                                     data-test="retry-at"
@@ -179,7 +189,9 @@ watch(inProgress, (active) => (active ? start() : stop()), {
                                         >
                                             {{
                                                 target.can_sync
-                                                    ? 'Sync'
+                                                    ? target.can_resume
+                                                        ? 'Resume'
+                                                        : 'Sync'
                                                     : 'In progress…'
                                             }}
                                         </Button>

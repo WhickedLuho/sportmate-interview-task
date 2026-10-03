@@ -13,6 +13,8 @@ export type SyncTarget = {
     status: SyncStatus;
     can_sync: boolean;
     can_cancel: boolean;
+    can_resume: boolean;
+    pages_saved: number | null;
     retry_at: string | null;
     last_attempted_at: string | null;
     last_synced_at: string | null;

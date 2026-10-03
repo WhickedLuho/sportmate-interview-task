@@ -25,6 +25,7 @@ use Illuminate\Support\Carbon;
  * @property bool $is_archived
  * @property Carbon|null $external_updated_at
  * @property Carbon|null $missing_at
+ * @property string|null $last_seen_sync_run_id
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  */

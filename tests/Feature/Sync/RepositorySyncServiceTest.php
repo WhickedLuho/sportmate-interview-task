@@ -5,6 +5,7 @@ namespace Tests\Feature\Sync;
 use App\Enums\SyncStatus;
 use App\Enums\TargetType;
 use App\Integrations\GitHub\Exceptions\GitHubUnavailableException;
+use App\Integrations\GitHub\GitHubClient;
 use App\Jobs\SyncTargetJob;
 use App\Models\Repository;
 use App\Models\SyncTarget;
@@ -21,7 +22,8 @@ class RepositorySyncServiceTest extends TestCase
 
     private function sync(SyncTarget $target): void
     {
-        $this->app->make(RepositorySyncService::class)->sync($target);
+        $target->markQueued($this->app->make(GitHubClient::class)->querySignature());
+        $this->app->make(RepositorySyncService::class)->sync($target, $target->sync_run_id, $target->dispatch_id);
     }
 
     public function test_it_creates_repositories_and_marks_the_target_synced(): void
@@ -151,15 +153,14 @@ class RepositorySyncServiceTest extends TestCase
     }
 
     #[DataProvider('invalidSyncResponses')]
-    public function test_invalid_responses_do_not_modify_repositories_or_last_success(string $body): void
+    public function test_invalid_later_pages_preserve_saved_pages_and_last_success(string $body): void
     {
         $target = SyncTarget::factory()->create(['name' => 'laravel']);
         $this->fakeGitHubRepositories([$this->githubRepository()]);
         $this->sync($target);
         $lastSuccess = $target->refresh()->last_synced_at;
-        $before = $target->repositories()->sole()->getAttributes();
         $this->travel(1)->hour();
-        $target->markQueued();
+        $target->markQueued($this->app->make(GitHubClient::class)->querySignature());
 
         $this->fakeGitHub(Http::sequence()
             ->push([$this->githubRepository(1, 'renamed', ['stargazers_count' => 999])], 200, ['Link' => '<https://api.github.com/x?page=2>; rel="next"'])
@@ -168,9 +169,17 @@ class RepositorySyncServiceTest extends TestCase
         $job = (new SyncTargetJob($target))->withFakeQueueInteractions();
         $job->handle($this->app->make(RepositorySyncService::class));
 
-        $job->assertNotReleased();
+        $job->assertReleased(1);
+        $this->assertSame(2, $target->refresh()->next_page);
+        $saved = $target->repositories()->sole()->getAttributes();
+        $this->assertSame('renamed', $saved['name']);
+        $this->assertNull($saved['missing_at']);
+
+        $nextAttempt = (new SyncTargetJob($target))->withFakeQueueInteractions();
+        $nextAttempt->handle($this->app->make(RepositorySyncService::class));
+        $nextAttempt->assertNotReleased();
         Http::assertSentCount(2);
-        $this->assertSame($before, $target->repositories()->sole()->getAttributes());
+        $this->assertSame($saved, $target->repositories()->sole()->getAttributes());
         $this->assertTrue($target->refresh()->last_synced_at->equalTo($lastSuccess));
         $this->assertSame(SyncStatus::Failed, $target->status);
         $this->assertNull($target->retry_at);

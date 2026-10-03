@@ -37,19 +37,19 @@ class PlannedTest extends TestCase
         );
     }
 
-    public function test_the_unique_lock_expires_so_a_crashed_worker_cannot_block_a_target_forever(): void
+    public function test_a_crashed_worker_releases_the_overlap_lock_after_its_lease_expires(): void
     {
         $this->markTestSkipped(
-            'Dispatch, simulate a worker crash (lock never released), travel past uniqueFor and assert the next '
-            .'dispatch is accepted again.'
+            'Lock expiry and database queue release are tested in ResumableSyncTest. Still needs a separate '
+            .'worker process killed mid-request to exercise reservation recovery and lease expiry together.'
         );
     }
 
     public function test_a_sync_aborts_without_flagging_repositories_when_the_page_limit_is_exceeded(): void
     {
         $this->markTestSkipped(
-            'Fake 101 pages: the client must throw instead of returning a partial list, and the service must not '
-            .'mark the repositories it did not see as missing.'
+            'The saved-cursor boundary is tested in ResumableSyncTest. A full 101-page worker run would additionally '
+            .'verify that all 100 committed pages survive the cap and no missing reconciliation happens.'
         );
     }
 
@@ -64,8 +64,8 @@ class PlannedTest extends TestCase
     public function test_a_target_stuck_in_queued_is_picked_up_again_by_the_scheduler(): void
     {
         $this->markTestSkipped(
-            'Depends on the stuck-target reaper that does not exist yet (see README, next steps): a target queued '
-            .'for several hours with no job should be reset and queued again.'
+            'Missing queue entries become failed/resumable through sync:recover, tested in RecoverStalledSyncsTest. '
+            .'Still needs an end-to-end scheduler tick proving recovery followed by scheduled resumption.'
         );
     }
 

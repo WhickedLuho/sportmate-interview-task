@@ -25,6 +25,8 @@ class SyncTargetResource extends JsonResource
             'status' => $this->status->value,
             'can_sync' => $this->status->canStartSync(),
             'can_cancel' => $this->status->canCancel(),
+            'can_resume' => $this->sync_run_id !== null && $this->status->canStartSync(),
+            'pages_saved' => $this->sync_run_id !== null ? $this->next_page - 1 : null,
             'retry_at' => $this->retry_at?->toIso8601String(),
             'last_attempted_at' => $this->last_attempted_at?->toIso8601String(),
             'last_synced_at' => $this->last_synced_at?->toIso8601String(),

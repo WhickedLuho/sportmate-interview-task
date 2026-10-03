@@ -53,45 +53,65 @@ class GitHubClient
         $repositories = [];
 
         for ($page = 1; $page <= self::MAX_PAGES; $page++) {
-            $response = $this->get('/users/'.rawurlencode($login).'/repos', [
-                'type' => 'owner',
-                // A stable order keeps pages consistent even if a repository is
-                // pushed to while we are paginating (the default is "created").
-                'sort' => 'full_name',
-                'direction' => 'asc',
-                'per_page' => self::PER_PAGE,
-                'page' => $page,
-            ]);
+            $result = $this->repositoriesPage($login, $page);
+            array_push($repositories, ...$result->repositories);
 
-            try {
-                // Preserve JSON objects: {} and {"0": {...}} must never become lists.
-                $items = json_decode($response->body(), associative: false, flags: JSON_THROW_ON_ERROR);
-            } catch (JsonException $e) {
-                throw new GitHubException("GitHub returned invalid JSON on page {$page}.", previous: $e);
-            }
-
-            if (! is_array($items)) {
-                throw new GitHubException("GitHub returned a non-list repositories payload on page {$page}.");
-            }
-
-            foreach ($items as $index => $item) {
-                if (! $item instanceof stdClass) {
-                    throw new GitHubException("GitHub returned a non-object repository on page {$page}, item {$index}.");
-                }
-
-                try {
-                    $repositories[] = RepositoryData::fromApi(get_object_vars($item));
-                } catch (GitHubException $e) {
-                    throw new GitHubException("Invalid repository on page {$page}, item {$index}: ".$e->getMessage(), previous: $e);
-                }
-            }
-
-            if (! $this->hasNextPage($response)) {
+            if (! $result->hasNextPage) {
                 return $repositories;
             }
         }
 
         throw new GitHubException('Aborted: more than '.self::MAX_PAGES." pages of repositories for [{$login}].");
+    }
+
+    /** The synchronization service calls this method once per queue execution. */
+    public function repositoriesPage(string $login, int $page): RepositoryPage
+    {
+        if ($page < 1 || $page > self::MAX_PAGES) {
+            throw new GitHubException('Repository page is outside the supported range of 1..'.self::MAX_PAGES.'.');
+        }
+
+        $response = $this->get('/users/'.rawurlencode($login).'/repos', [
+            'type' => 'owner',
+            // A stable order keeps pages consistent even if a repository is
+            // pushed to while we are paginating (the default is "created").
+            'sort' => 'full_name',
+            'direction' => 'asc',
+            'per_page' => self::PER_PAGE,
+            'page' => $page,
+        ]);
+
+        try {
+            // Preserve JSON objects: {} and {"0": {...}} must never become lists.
+            $items = json_decode($response->body(), associative: false, flags: JSON_THROW_ON_ERROR);
+        } catch (JsonException $e) {
+            throw new GitHubException("GitHub returned invalid JSON on page {$page}.", previous: $e);
+        }
+
+        if (! is_array($items)) {
+            throw new GitHubException("GitHub returned a non-list repositories payload on page {$page}.");
+        }
+
+        $repositories = [];
+        foreach ($items as $index => $item) {
+            if (! $item instanceof stdClass) {
+                throw new GitHubException("GitHub returned a non-object repository on page {$page}, item {$index}.");
+            }
+
+            try {
+                $repositories[] = RepositoryData::fromApi(get_object_vars($item));
+            } catch (GitHubException $e) {
+                throw new GitHubException("Invalid repository on page {$page}, item {$index}: ".$e->getMessage(), previous: $e);
+            }
+        }
+
+        return new RepositoryPage($repositories, $this->hasNextPage($response));
+    }
+
+    /** A saved page number is only meaningful for the same endpoint and query. */
+    public function querySignature(): string
+    {
+        return hash('sha256', implode('|', [$this->baseUrl, 'users/repos', 'owner', 'full_name', 'asc', self::PER_PAGE]));
     }
 
     /**

@@ -15,6 +15,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Str;
 
 /**
  * A GitHub user or organization whose public repositories are synchronized.
@@ -28,10 +29,15 @@ use Illuminate\Support\Carbon;
  * @property Carbon|null $last_synced_at
  * @property Carbon|null $retry_at
  * @property string|null $last_error
+ * @property string|null $sync_run_id
+ * @property string|null $dispatch_id
+ * @property int $next_page
+ * @property string|null $sync_query_signature
+ * @property Carbon|null $last_page_saved_at
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  */
-#[Fillable(['name', 'type', 'status', 'last_attempted_at', 'last_synced_at', 'retry_at', 'last_error'])]
+#[Fillable(['name', 'type', 'status', 'last_attempted_at', 'last_synced_at', 'retry_at', 'last_error', 'sync_run_id', 'dispatch_id', 'next_page', 'sync_query_signature', 'last_page_saved_at'])]
 class SyncTarget extends Model
 {
     /** @use HasFactory<SyncTargetFactory> */
@@ -48,6 +54,8 @@ class SyncTarget extends Model
             'last_attempted_at' => 'datetime',
             'last_synced_at' => 'datetime',
             'retry_at' => 'datetime',
+            'next_page' => 'integer',
+            'last_page_saved_at' => 'datetime',
         ];
     }
 
@@ -86,12 +94,28 @@ class SyncTarget extends Model
      *
      * @return bool whether this call claimed the target (and a job should be dispatched)
      */
-    public function markQueued(): bool
+    public function markQueued(?string $querySignature = null): bool
     {
+        $this->refresh();
+        $resume = $this->sync_run_id !== null
+            && ($querySignature === null || $this->sync_query_signature === $querySignature);
+
         $claimed = static::query()
             ->whereKey($this->getKey())
+            ->where('sync_run_id', $this->sync_run_id)
+            ->where('dispatch_id', $this->dispatch_id)
             ->whereNotIn('status', array_map(fn (SyncStatus $status) => $status->value, SyncStatus::inProgress()))
-            ->update(['status' => SyncStatus::Queued, 'updated_at' => now()]) === 1;
+            ->update([
+                'status' => SyncStatus::Queued,
+                'sync_run_id' => $resume ? $this->sync_run_id : (string) Str::uuid(),
+                'dispatch_id' => (string) Str::uuid(),
+                'next_page' => $resume ? $this->next_page : 1,
+                'sync_query_signature' => $querySignature ?? $this->sync_query_signature,
+                'last_page_saved_at' => $resume ? $this->last_page_saved_at : null,
+                'retry_at' => null,
+                'last_error' => null,
+                'updated_at' => now(),
+            ]) === 1;
 
         $this->refresh();
 
@@ -103,8 +127,8 @@ class SyncTarget extends Model
      *
      * This does not remove the job from the queue (with the database queue that would mean
      * searching serialized payloads). The job notices on wake-up that the target is no longer
-     * pending and exits without calling GitHub. If the user starts a new sync before then,
-     * the new dispatch is dropped by the unique lock and the old job simply does the work.
+     * pending and exits without calling GitHub. A later request keeps the saved page but
+     * gets a new dispatch id, so the old payload cannot affect the resumed synchronization.
      *
      * @return bool whether something was cancelled
      */
@@ -114,7 +138,7 @@ class SyncTarget extends Model
             ->whereKey($this->getKey())
             ->whereIn('status', array_map(fn (SyncStatus $status) => $status->value, [SyncStatus::Queued, SyncStatus::RateLimited]))
             // Not an error, so there is nothing to show as one.
-            ->update(['status' => SyncStatus::Idle, 'retry_at' => null, 'last_error' => null, 'updated_at' => now()]) === 1;
+            ->update(['status' => SyncStatus::Idle, 'dispatch_id' => null, 'retry_at' => null, 'last_error' => null, 'updated_at' => now()]) === 1;
 
         $this->refresh();
 
@@ -132,6 +156,10 @@ class SyncTarget extends Model
             'status' => SyncStatus::Synced,
             'type' => $type ?? $this->type,
             'last_synced_at' => now(),
+            'sync_run_id' => null,
+            'dispatch_id' => null,
+            'next_page' => 1,
+            'sync_query_signature' => null,
             'retry_at' => null,
             'last_error' => null,
         ]);

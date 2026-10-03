@@ -2,154 +2,153 @@
 
 namespace App\Jobs;
 
+use App\Enums\SyncStatus;
 use App\Integrations\GitHub\Exceptions\GitHubException;
-use App\Integrations\GitHub\Exceptions\GitHubNotFoundException;
 use App\Integrations\GitHub\Exceptions\GitHubRateLimitedException;
 use App\Integrations\GitHub\Exceptions\GitHubUnavailableException;
 use App\Models\SyncTarget;
 use App\Services\RepositorySyncService;
-use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 use Throwable;
 
-/**
- * Runs {@see RepositorySyncService} in the background and decides what each kind
- * of failure means for the queue:
- *
- *  - not found / unexpected GitHub answer: permanent, recorded on the target, never retried
- *  - rate limited: put back on the queue until GitHub says the limit resets
- *  - unavailable: rethrown, so the queue retries with back-off
- *  - anything else (a bug): rethrown; ends up in failed_jobs and on the target
- */
-class SyncTargetJob implements ShouldBeUnique, ShouldQueue
+class SyncTargetJob implements ShouldQueue
 {
     use InteractsWithQueue, Queueable, SerializesModels;
 
-    /**
-     * Must stay below `retry_after` (90s) of the queue connection. Otherwise a second
-     * worker would pick the same job up while the first is still running.
-     */
+    /** Below overlap lease (75s), below queue retry_after (90s). */
     public int $timeout = 60;
 
-    /** A timeout fails the job outright instead of being retried. */
     public bool $failOnTimeout = true;
 
-    /**
-     * Only exceptions count towards this limit; releasing the job because of a rate
-     * limit increments attempts but does not use this exception budget.
-     */
     public int $maxExceptions = 3;
 
-    /** If the target was deleted while the job waited, there is nothing left to do. */
     public bool $deleteWhenMissingModels = true;
 
-    /** Seconds the unique lock is kept at most, so a crashed worker cannot block a target forever. */
-    public int $uniqueFor = 7200;
+    // Old serialized jobs can exit safely after the progress migration.
+    public ?string $runId = null;
 
-    public function __construct(public SyncTarget $target) {}
+    public ?string $dispatchId = null;
 
-    /**
-     * One pending/running synchronization per target. A duplicate dispatch while the
-     * lock is held is silently dropped.
-     */
-    public function uniqueId(): string
+    public function __construct(public SyncTarget $target)
     {
-        return (string) $this->target->id;
+        $this->runId = $target->sync_run_id;
+        $this->dispatchId = $target->dispatch_id;
     }
 
-    /** Give up for good after this long, however many times the job was released. */
+    public function displayName(): string
+    {
+        return 'SyncTargetJob:'.$this->target->id.':'.($this->dispatchId ?? 'legacy');
+    }
+
+    /** @return list<WithoutOverlapping> */
+    public function middleware(): array
+    {
+        return [(new WithoutOverlapping('sync-target:'.$this->target->id))->releaseAfter(1)->expireAfter(75)];
+    }
+
+    /** Captured once in the payload, preserved on every release. */
     public function retryUntil(): \DateTimeInterface
     {
         return now()->addHours(2);
     }
 
-    /**
-     * Seconds to wait after a thrown exception, per attempt.
-     *
-     * @return list<int>
-     */
-    public function backoff(): array
+    /** Successful pages also count as attempts, so backoff is not attempt-indexed. */
+    public function backoff(): int
     {
-        return [30, 120];
+        return 30;
     }
 
     public function handle(RepositorySyncService $sync): void
     {
-        // The user may have stopped the synchronization while this job was waiting (queued
-        // or paused by a rate limit). Exit without touching GitHub in that case.
-        if (! $this->target->status->isInProgress()) {
-            Log::info('GitHub synchronization skipped: it is no longer pending.', [
-                'sync_target_id' => $this->target->id,
-                'target' => $this->target->name,
-                'status' => $this->target->status->value,
+        $this->target->refresh();
+        if (! $this->isCurrent()) {
+            Log::info('GitHub synchronization skipped: stopped or superseded dispatch.', [
+                'sync_target_id' => $this->target->id, 'dispatch_id' => $this->dispatchId,
             ]);
 
             return;
         }
 
         try {
-            $sync->sync($this->target);
+            if ($sync->sync($this->target, $this->runId, $this->dispatchId)) {
+                if (! $this->canRetryAt(now()->addSecond())) {
+                    $this->recordState(SyncStatus::Failed, 'The synchronization retry window has expired. Resume synchronization to continue from the saved page.');
+
+                    return;
+                }
+                // Give other targets a chance to run; the cursor lives in the database.
+                $this->release(1);
+            }
         } catch (GitHubRateLimitedException $e) {
-            // A little extra time so we do not wake up exactly at the reset second.
             $delay = max(1, (int) now()->diffInSeconds($e->retryAt, false)) + 5;
             $retryAt = now()->addSeconds($delay);
-            // Laravel fixes this timestamp in the queue payload at dispatch. Calling
-            // our retryUntil() here would incorrectly start a fresh two-hour window.
-            $deadline = $this->job?->retryUntil();
-
-            if ($deadline !== null && $retryAt->timestamp >= $deadline) {
+            if (! $this->canRetryAt($retryAt)) {
                 $this->logFailure($e);
-                $this->target->markFailed('GitHub rate limit would exceed the synchronization retry window. Please start a new synchronization later.');
+                $this->recordState(SyncStatus::Failed, 'GitHub rate limit would exceed the synchronization retry window. Please start a new synchronization later.');
 
                 return;
             }
-
-            $this->target->markRateLimited($e->userMessage(), $retryAt);
-            $this->release($delay);
+            if ($this->recordState(SyncStatus::RateLimited, $e->userMessage(), $retryAt)) {
+                $this->release($delay);
+            }
         } catch (GitHubUnavailableException $e) {
             $this->logFailure($e);
-            $this->target->markRetrying($e->userMessage());
-
-            throw $e;
-        } catch (GitHubNotFoundException $e) {
-            // Permanent: retrying cannot make a missing account appear.
-            $this->logFailure($e);
-            $this->target->markFailed($e->userMessage());
+            if ($this->recordState(SyncStatus::Queued, $e->userMessage())) {
+                throw $e;
+            }
         } catch (GitHubException $e) {
-            // e.g. an invalid token. Retrying with the same configuration would fail the same way.
             $this->logFailure($e);
-            $this->target->markFailed($e->userMessage());
+            $this->recordState(SyncStatus::Failed, $e->userMessage());
         }
     }
 
-    /**
-     * Called by the queue once the job has failed for good (retries exhausted,
-     * timed out, or an unexpected exception). The raw exception is logged; the
-     * user only sees a generic message.
-     */
     public function failed(Throwable $exception): void
     {
         $this->logFailure($exception);
+        $this->recordState(SyncStatus::Failed, $exception instanceof GitHubException
+            ? $exception->userMessage()
+            : 'The synchronization failed unexpectedly. Please try again later.');
+    }
 
-        $this->target->markFailed(
-            $exception instanceof GitHubException
-                ? $exception->userMessage()
-                : 'The synchronization failed unexpectedly. Please try again later.',
-        );
+    private function isCurrent(): bool
+    {
+        return $this->runId !== null && $this->dispatchId !== null
+            && $this->target->sync_run_id === $this->runId && $this->target->dispatch_id === $this->dispatchId
+            && $this->target->status->isInProgress();
+    }
+
+    private function canRetryAt(\DateTimeInterface $retryAt): bool
+    {
+        $deadline = $this->job?->retryUntil();
+
+        return $deadline === null || $retryAt->getTimestamp() < $deadline;
+    }
+
+    /** Failures can happen before handle(), so the callback must also be fenced. */
+    private function recordState(SyncStatus $status, string $message, ?\DateTimeInterface $retryAt = null): bool
+    {
+        if ($this->runId === null || $this->dispatchId === null) {
+            return false;
+        }
+
+        return SyncTarget::query()->whereKey($this->target->id)
+            ->where('sync_run_id', $this->runId)->where('dispatch_id', $this->dispatchId)
+            ->whereIn('status', array_map(fn (SyncStatus $state) => $state->value, SyncStatus::inProgress()))
+            ->update(['status' => $status, 'last_error' => $message, 'retry_at' => $retryAt, 'updated_at' => now()]) === 1;
     }
 
     private function logFailure(Throwable $exception): void
     {
         Log::warning('GitHub synchronization failed.', [
-            'sync_target_id' => $this->target->id,
-            'target' => $this->target->name,
-            'attempt' => $this->attempts(),
-            'exception' => $exception::class,
-            'message' => $exception->getMessage(),
+            'sync_target_id' => $this->target->id, 'target' => $this->target->name,
+            'sync_run_id' => $this->runId, 'dispatch_id' => $this->dispatchId,
+            'page' => $this->target->next_page, 'attempt' => $this->attempts(),
+            'exception' => $exception::class, 'message' => $exception->getMessage(),
         ]);
     }
 }

@@ -78,12 +78,12 @@ Useful commands (all inside the containers):
 Browser (Inertia/Vue)
    │  POST /targets/{id}/sync
    ▼
-SyncTargetController ── markQueued() (atomic claim) ──► SyncTargetJob (queue, unique per target)
+SyncTargetController ── SyncDispatchService (claim + enqueue) ──► SyncTargetJob
                                                               │
                                                               ▼
                                                    RepositorySyncService
                                                       │              │
-                                      GitHubClient (HTTP, pages)     DB transaction: upsert + reconcile
+                                      GitHubClient (one page)       DB transaction: page upsert + cursor
                                                       │
                                                   GitHub API
 ```
@@ -94,7 +94,7 @@ SyncTargetController ── markQueued() (atomic claim) ──► SyncTargetJob 
 | Controllers (thin)                                | `app/Http/Controllers`                                                     |
 | GitHub communication, DTO mapping, typed failures | `app/Integrations/GitHub`                                                  |
 | Synchronization logic and database writes         | `app/Services/RepositorySyncService.php`                                   |
-| Queue behaviour: retries, timeouts, uniqueness    | `app/Jobs/SyncTargetJob.php`                                               |
+| Queue behaviour: retries, timeouts, overlap guard | `app/Jobs/SyncTargetJob.php`                                               |
 | Status transitions                                | `app/Models/SyncTarget.php`, `app/Enums/SyncStatus.php`                    |
 | Scheduling                                        | `app/Console/Commands/SyncDueTargets.php`, `routes/console.php`            |
 | UI                                                | `resources/js/pages/targets`, `resources/js/pages/repositories`            |
@@ -130,24 +130,28 @@ cannot use a B-tree index. A real application would use SQLite FTS5 or, on MySQL
 
 ## Queue behaviour
 
-| Topic              | What is implemented                                                                                                                                                                                                                                                                                          |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Duplicate requests | `markQueued()` is one conditional `UPDATE ... WHERE status NOT IN (queued, syncing, rate_limited)`, so two simultaneous clicks cannot both win. The job is also `ShouldBeUnique` per target, so a duplicate dispatch is dropped.                                                                             |
-| Overlapping jobs   | The unique lock is held while the job is queued **and** running, so one target never syncs twice at once. (`WithoutOverlapping` would only be needed if several different job classes touched the same target.) The lock expires after 2 h (`uniqueFor`), so a crashed worker cannot block a target forever. |
-| Retries            | Transient failures (5xx, connection errors) are rethrown: retried after 30 s, then 120 s, at most 3 exceptions (`maxExceptions`). Permanent failures (unknown account, invalid token) are recorded on the target and **not** retried.                                                                        |
+| Topic              | What is implemented                                                                                                                                                                                                                  |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Duplicate requests | An atomic target claim and its database queue entry are written in the same transaction. A repeated request cannot create another active dispatch.                                                                                   |
+| Overlapping jobs   | WithoutOverlapping uses a target-level cache lock (75 s). Commit and failure updates also check run/dispatch ids. A resumed attempt supersedes old payloads.                                                                         |
+| Retries            | Transient GitHub failures retry after 30 s, at most 3 exceptions. Successful page releases increment attempts but not maxExceptions. Permanent errors preserve progress without automatic retry.                                     |
 | Rate limits        | The job is released until GitHub reset plus 5 seconds, only if that time is before the original 2-hour queue deadline. Otherwise the target fails with a safe message and permits a new sync. Releases do not consume maxExceptions. |
-| Timeouts           | The job times out after 60 s and fails (`failOnTimeout`). It must stay below the queue connection's `retry_after` (90 s), otherwise a second worker would pick up a job that is still running. Each HTTP call has its own 10 s timeout.                                                                      |
-| Failed jobs        | `failed()` marks the target `failed` with a generic message and logs the exception; the job also lands in `failed_jobs` (`php artisan queue:failed`, `queue:retry`).                                                                                                                                         |
+| Timeouts           | One page per execution, 60 s job timeout; overlap lease 75 s, queue retry_after 90 s. Each HTTP request has a 10 s timeout. Terminal failure keeps saved pages.                                                                      |
+| Failed jobs        | `failed()` marks the target `failed` with a generic message and logs the exception; the job also lands in `failed_jobs` (`php artisan queue:failed`, `queue:retry`).                                                                 |
 
-**Stopping a synchronization.** A target that is `queued` or `rate_limited` shows a **Stop** button, and a
-rate-limited one shows the time it will retry (`retry_at`). Stopping sets the target back to `idle` (a manual stop is
-not an error, so no error is recorded). The job is deliberately **not** removed from the queue (with the database
-queue that would mean searching serialized payloads); instead the job checks on wake-up whether the target is still
-pending and exits without calling GitHub if it is not. If the user presses Sync again before that job wakes up, the
-new dispatch is dropped by the unique lock, and the waiting job finds the target pending again and does the work, so a
-target can never be left `queued` without a job. A request that is already running (`syncing`) is not interrupted;
-it finishes within seconds. Stopping is not a pause: the hourly scheduler will queue the target again once its last
-attempt is older than 55 minutes.
+**Stopping a synchronization.** Queued or rate-limited targets show **Stop**. Stopping invalidates the active
+dispatch and preserves committed pages. Old jobs exit without calling GitHub; **Resume** queues a new attempt from
+the saved page. Running requests cannot be stopped from the UI. The hourly scheduler still resumes due targets;
+Stop does not disable scheduled synchronization.
+
+**Queue consistency and recovery.** SyncDispatchService writes the target claim and database queue entry in one
+transaction on the same connection. Synchronization explicitly uses the database queue. Every five minutes,
+`sync:recover` makes old pending targets without a matching queue entry failed/resumable. Delayed and reserved
+jobs are never declared missing merely because they are old.
+
+**Updating an existing checkout:** stop queue and scheduler, run `php artisan migrate`, build frontend assets and
+start the services again. Legacy jobs without progress metadata safely exit; recovery makes old pending targets
+retryable. Existing repository rows are preserved.
 
 **Deploying and monitoring the worker (not set up here):** run `queue:work` under a process supervisor
 (Supervisor or systemd, or a dedicated container as in `compose.yaml`) with `restart: unless-stopped`, restart it
@@ -170,7 +174,7 @@ Horizon would give this on Redis; with the database queue a scheduled check of `
 - The client does not retry; retry and back-off policy belongs to the queued job.
 - Responses must be JSON lists of objects. Consumed fields are validated before persistence: positive integer
   repository ids, nonempty names, HTTP(S) URLs, typed optional values and valid timestamps. A malformed item or
-  later page fails the whole sync with a safe message; existing rows and the last successful sync time are preserved.
+  later page fails the current attempt with a safe message; earlier saved pages and the last successful sync time are preserved.
 
 Rate-limit releases use the reset time plus a 5-second buffer and do not consume `maxExceptions`. The next attempt
 must be strictly before the original queue payload's 2-hour `retryUntil`. Otherwise the target becomes `failed`,
@@ -183,9 +187,15 @@ clears `retry_at` and allows a new manual sync. This handled failure is recorded
   action is reversible. They are hidden in the list unless _Show missing_ is ticked, and a repository that comes
   back is unflagged. Known compromise: if GitHub ever returned an empty list by mistake, every repository of that
   target would be flagged until the next good sync.
-- **Transaction boundary:** all network I/O happens first, then one short database transaction writes the batch
-  (upsert in chunks of 200) and reconciles. A failure while talking to GitHub therefore never leaves a half-synced
-  target, and the transaction never waits on the network.
+- **Transaction boundary:** each execution fetches and validates one page before a short transaction. The page upsert
+  and cursor advance commit together. Later failures preserve saved pages and the last successful sync time.
+  Missing reconciliation runs only with the final page.
+- **Resumption:** `sync_run_id` marks the data run; `dispatch_id` fences each queue attempt and old failure callbacks.
+  `next_page` points to the first uncommitted page. Stop preserves progress, Resume gets a new dispatch, and the
+  next sync after full completion starts from page 1. Changed query parameters start a new data run.
+- **Partial results:** saved pages are immediately browsable. GitHub pagination is not a snapshot: additions, removals
+  or renames during a run can shift boundaries. Existing missing flags remain reversible; a later complete sync may
+  correct skipped records. Direct absence checks would be the next improvement before treating flags as authoritative.
 - **Caching:** there is no cache layer; every list is a database query scoped by user. If one were added (for example
   the language filter options), it would be keyed per user and invalidated at the end of a successful sync, in the same
   place that already marks the target `synced`.
@@ -217,15 +227,18 @@ Planned but not written test cases are listed as skipped placeholders in `tests/
 `tests/Unit` contains isolated PHPUnit tests for DTO validation, database-field mapping, optional defaults, GitHub
 account types and synchronization status controls; these do not boot Laravel or use a database. Regression tests
 also cover object-vs-list JSON, malformed later pages preserving stored data, and retry boundaries against actual
-database-queue payloads, including release and a successful second run. A separate worker process is not exercised.
+database-queue payloads, including release and a successful second run. New tests cover 0..8,400 repositories,
+page-write rollback, saved-page resume, stale callbacks, enqueue rollback, overlap expiry, target interleaving and
+Laravel Worker::process() across more than three successful pages. Tests do not launch a separate worker process.
 
 ## Compromises and what I would do next
 
 - **Rate limits are the real bottleneck without a token.** Next: require a token in production, spread scheduled
   syncs over the hour instead of queuing everything at once, and use conditional requests (`ETag` / `If-None-Match`),
   which do not count against the limit when nothing changed.
-- **Stuck targets:** a target left in `queued`/`syncing` (for example if the queue is wiped) is never picked up
-  again by the scheduler. A small "reaper" for statuses older than a few hours would fix that.
+- **Stuck targets:** `sync:recover` runs every five minutes and marks old pending targets without their current queue
+  entry as failed/resumable. Existing delayed and reserved jobs are left alone. It does not diagnose a stopped worker
+  while queue entries still exist; operational monitoring remains necessary.
 - **No sync history:** only the latest status and error are stored. A `sync_runs` table (start, end, counts, error)
   would make failures much easier to debug.
 - **Target deletion** is not in the UI (the database cascade and policy are ready).
@@ -241,5 +254,5 @@ database-queue payloads, including release and a successful second run. A separa
 - **Completed:** baseline (targets, GitHub client with pagination, local storage with upsert, queued sync, Inertia/Vue UI
   with search/filter/sort, tests, AI usage notes) plus pagination, per-user multitenancy, simple reconciliation and
   scheduled synchronization.
-- **Incomplete:** REST API, README full-text search, sync history, stuck-target reaper (see above).
+- **Incomplete:** REST API, README full-text search, sync history and confirmation of missing repositories against a changing GitHub listing.
 - **Important compromises:** see the section above.

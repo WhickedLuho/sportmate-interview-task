@@ -12,3 +12,5 @@ Artisan::command('inspire', function () {
 Schedule::command('sync:targets')
     ->hourly()
     ->withoutOverlapping(10);
+
+Schedule::command('sync:recover')->everyFiveMinutes()->withoutOverlapping(10);

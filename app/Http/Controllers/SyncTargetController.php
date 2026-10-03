@@ -4,8 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\StoreSyncTargetRequest;
 use App\Http\Resources\SyncTargetResource;
-use App\Jobs\SyncTargetJob;
 use App\Models\SyncTarget;
+use App\Services\SyncDispatchService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -41,14 +41,13 @@ class SyncTargetController extends Controller
     /**
      * Queue a synchronization. Returns immediately; the worker does the actual work.
      */
-    public function sync(SyncTarget $target): RedirectResponse
+    public function sync(SyncTarget $target, SyncDispatchService $dispatch): RedirectResponse
     {
         Gate::authorize('manage', $target);
 
         // markQueued() is an atomic claim: if a sync is already pending or running
         // (or a double click raced us), nothing is dispatched a second time.
-        if ($target->markQueued()) {
-            SyncTargetJob::dispatch($target);
+        if ($dispatch->startOrResume($target)) {
 
             Inertia::flash('toast', ['type' => 'success', 'message' => __('Synchronization started.')]);
         } else {

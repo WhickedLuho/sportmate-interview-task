@@ -7,6 +7,7 @@ use App\Integrations\GitHub\Exceptions\GitHubUnavailableException;
 use App\Jobs\SyncTargetJob;
 use App\Models\SyncTarget;
 use App\Services\RepositorySyncService;
+use App\Services\SyncDispatchService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -88,24 +89,22 @@ class SyncTargetJobTest extends TestCase
         $this->assertSame(0, $target->repositories()->count());
     }
 
-    public function test_syncing_again_after_stopping_is_picked_up_by_the_job_that_is_still_waiting(): void
+    public function test_syncing_again_after_stopping_supersedes_the_waiting_job(): void
     {
         Queue::fake();
         $target = SyncTarget::factory()->create(['name' => 'laravel']);
 
-        // First request: the job is queued (and holds the unique lock), then the user stops it.
-        $this->assertTrue($target->markQueued());
-        SyncTargetJob::dispatch($target);
+        $dispatch = $this->app->make(SyncDispatchService::class);
+        $this->assertTrue($dispatch->startOrResume($target));
+        $oldJob = new SyncTargetJob($target);
         $this->assertTrue($target->markCancelled());
 
-        // The user changes their mind before the waiting job wakes up. The dispatch is dropped
-        // by the unique lock, so the target must not be left "queued" without a job...
-        $this->assertTrue($target->markQueued());
-        SyncTargetJob::dispatch($target);
-        Queue::assertPushed(SyncTargetJob::class, 1);
+        $this->assertTrue($dispatch->startOrResume($target));
+        Queue::assertPushed(SyncTargetJob::class, 2);
 
-        // ...because the job that is still waiting finds the target pending again and does the work.
         $this->fakeGitHubRepositories([$this->githubRepository()]);
+        $oldJob->withFakeQueueInteractions()->handle($this->app->make(RepositorySyncService::class));
+        Http::assertNothingSent();
         $this->runJob($target->refresh());
 
         $this->assertSame(SyncStatus::Synced, $target->refresh()->status);
@@ -158,8 +157,9 @@ class SyncTargetJobTest extends TestCase
         Queue::fake();
         $target = SyncTarget::factory()->create();
 
-        SyncTargetJob::dispatch($target);
-        SyncTargetJob::dispatch($target);
+        $dispatch = $this->app->make(SyncDispatchService::class);
+        $this->assertTrue($dispatch->startOrResume($target));
+        $this->assertFalse($dispatch->startOrResume($target));
 
         Queue::assertPushed(SyncTargetJob::class, 1);
     }

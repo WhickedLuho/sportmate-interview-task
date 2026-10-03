@@ -86,4 +86,16 @@ class SyncTargetStatusTest extends TestCase
             $this->assertSame(SyncStatus::Queued, $target->status);
         }
     }
+
+    public function test_mark_synced_clears_progress_so_the_next_request_starts_a_new_run(): void
+    {
+        $target = SyncTarget::factory()->create(['status' => SyncStatus::Queued, 'next_page' => 13]);
+        $oldRun = $target->sync_run_id;
+        $target->markSynced(null);
+        $this->assertNull($target->sync_run_id);
+        $this->assertSame(1, $target->next_page);
+        $this->assertTrue($target->markQueued());
+        $this->assertNotSame($oldRun, $target->sync_run_id);
+        $this->assertSame(1, $target->next_page);
+    }
 }

@@ -39,6 +39,13 @@ class SyncDueTargets extends Command
      */
     public const DUE_AFTER_MINUTES = 55;
 
+    /**
+     * Queue eligible targets through the same dispatcher used by manual syncs.
+     *
+     * @param  SyncDispatchService  $dispatch  Service that atomically claims and queues each target.
+     *
+     * @return int Command exit code; zero on successful completion.
+     */
     public function handle(SyncDispatchService $dispatch): int
     {
         $queued = 0;

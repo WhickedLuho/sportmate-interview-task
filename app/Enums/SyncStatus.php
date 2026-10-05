@@ -16,31 +16,39 @@ enum SyncStatus: string
     case RateLimited = 'rate_limited';
 
     /**
-     * Statuses in which a job is already pending or running, so requesting
-     * another synchronization would be pointless.
+     * List statuses with a queued, running or rate-limited synchronization.
      *
-     * @return list<self>
+     * @return list<self> Statuses that represent active work.
      */
     public static function inProgress(): array
     {
         return [self::Queued, self::Syncing, self::RateLimited];
     }
 
-    /** Whether a job is pending or running in this status. */
+    /**
+     * Check whether this status represents active synchronization work.
+     *
+     * @return bool True for queued, syncing or rate-limited status.
+     */
     public function isInProgress(): bool
     {
         return in_array($this, self::inProgress(), true);
     }
 
-    /** Whether a new synchronization may be requested from this status. */
+    /**
+     * Check whether this status permits a new or resumed dispatch.
+     *
+     * @return bool True when no synchronization is currently active.
+     */
     public function canStartSync(): bool
     {
         return ! $this->isInProgress();
     }
 
     /**
-     * Whether the user may stop the synchronization. A running request is not interrupted
-     * (it finishes within seconds); only a job that is still waiting can be stopped.
+     * Check whether this status permits stopping waiting work.
+     *
+     * @return bool True for queued or rate-limited status; false while processing.
      */
     public function canCancel(): bool
     {

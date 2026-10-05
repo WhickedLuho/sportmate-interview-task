@@ -32,6 +32,14 @@ class GitHubClient
 
     private const DEFAULT_RETRY_SECONDS = 60;
 
+    /**
+     * Configure GitHub requests and their optional authentication.
+     *
+     * @param  string  $baseUrl  Base URL of the GitHub API.
+     * @param  string|null  $token  Authentication token, or null for anonymous requests.
+     * @param  int  $timeout  Maximum duration of a request in seconds.
+     * @param  int  $connectTimeout  Maximum connection-establishment time in seconds.
+     */
     public function __construct(
         #[Config('services.github.base_url')] private readonly string $baseUrl,
         #[Config('services.github.token')] private readonly ?string $token,
@@ -40,12 +48,15 @@ class GitHubClient
     ) {}
 
     /**
-     * Fetch every public repository owned by a user or organization, across all pages.
+     * Collect all repository pages within the configured safety limit.
      *
-     * `/users/{login}/repos` works for organizations too, so one endpoint covers both.
+     * @param  string  $login  GitHub username or organization name.
      *
-     * @return list<RepositoryData>
+     * @return list<RepositoryData> Validated repositories from every fetched page.
      *
+     * @throws GitHubNotFoundException
+     * @throws GitHubRateLimitedException
+     * @throws GitHubUnavailableException
      * @throws GitHubException
      */
     public function repositories(string $login): array
@@ -64,7 +75,19 @@ class GitHubClient
         throw new GitHubException('Aborted: more than '.self::MAX_PAGES." pages of repositories for [{$login}].");
     }
 
-    /** The synchronization service calls this method once per queue execution. */
+    /**
+     * Fetch and validate one page without requesting the following page.
+     *
+     * @param  string  $login  GitHub username or organization name.
+     * @param  int  $page  One-based page number within the supported range.
+     *
+     * @return RepositoryPage Validated repositories and the next-page flag.
+     *
+     * @throws GitHubNotFoundException
+     * @throws GitHubRateLimitedException
+     * @throws GitHubUnavailableException
+     * @throws GitHubException
+     */
     public function repositoriesPage(string $login, int $page): RepositoryPage
     {
         if ($page < 1 || $page > self::MAX_PAGES) {
@@ -108,15 +131,27 @@ class GitHubClient
         return new RepositoryPage($repositories, $this->hasNextPage($response));
     }
 
-    /** A saved page number is only meaningful for the same endpoint and query. */
+    /**
+     * Identify the endpoint and query settings required to resume a saved cursor.
+     *
+     * @return string SHA-256 signature of the repository query configuration.
+     */
     public function querySignature(): string
     {
         return hash('sha256', implode('|', [$this->baseUrl, 'users/repos', 'owner', 'full_name', 'asc', self::PER_PAGE]));
     }
 
     /**
-     * @param  array<string, scalar>  $query
+     * Send a GitHub GET request and translate connection or API failures.
      *
+     * @param  string  $path  API path relative to the configured base URL.
+     * @param  array<string, scalar>  $query  Query parameters sent with the request.
+     *
+     * @return Response Successful GitHub HTTP response.
+     *
+     * @throws GitHubNotFoundException
+     * @throws GitHubRateLimitedException
+     * @throws GitHubUnavailableException
      * @throws GitHubException
      */
     private function get(string $path, array $query): Response
@@ -131,6 +166,11 @@ class GitHubClient
         return $this->ensureSuccessful($response, $path);
     }
 
+    /**
+     * Build an HTTP client with GitHub headers, timeouts and an optional token.
+     *
+     * @return PendingRequest Configured client for the next API request.
+     */
     private function request(): PendingRequest
     {
         return Http::baseUrl($this->baseUrl)
@@ -143,6 +183,16 @@ class GitHubClient
     }
 
     /**
+     * Return a successful response or raise the matching integration exception.
+     *
+     * @param  Response  $response  GitHub response to inspect.
+     * @param  string  $path  Requested API path included in technical error messages.
+     *
+     * @return Response The unchanged successful response.
+     *
+     * @throws GitHubNotFoundException
+     * @throws GitHubRateLimitedException
+     * @throws GitHubUnavailableException
      * @throws GitHubException
      */
     private function ensureSuccessful(Response $response, string $path): Response
@@ -170,8 +220,11 @@ class GitHubClient
     }
 
     /**
-     * GitHub signals both the primary limit (403 with remaining = 0) and the
-     * secondary/abuse limit (403 or 429 with Retry-After) differently.
+     * Recognize GitHub primary and secondary rate-limit responses.
+     *
+     * @param  Response  $response  GitHub response whose status and headers are inspected.
+     *
+     * @return bool True if the response indicates a rate limit.
      */
     private function isRateLimited(Response $response): bool
     {
@@ -180,6 +233,13 @@ class GitHubClient
                 && ($response->header('X-RateLimit-Remaining') === '0' || $response->hasHeader('Retry-After')));
     }
 
+    /**
+     * Determine the retry time from GitHub headers or the default delay.
+     *
+     * @param  Response  $response  Rate-limited response with optional retry headers.
+     *
+     * @return CarbonImmutable Time when another request may be attempted.
+     */
     private function retryAt(Response $response): CarbonImmutable
     {
         if ($response->hasHeader('Retry-After')) {
@@ -193,6 +253,13 @@ class GitHubClient
         return CarbonImmutable::now()->addSeconds(self::DEFAULT_RETRY_SECONDS);
     }
 
+    /**
+     * Check whether the Link header advertises a following repository page.
+     *
+     * @param  Response  $response  Repository response containing pagination headers.
+     *
+     * @return bool True if the header contains a next-page relation.
+     */
     private function hasNextPage(Response $response): bool
     {
         return str_contains($response->header('Link'), 'rel="next"');

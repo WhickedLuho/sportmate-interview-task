@@ -1,3 +1,13 @@
 {
-    "preset": "laravel"
+    "preset": "laravel",
+    "rules": {
+        "phpdoc_separation": {
+            "groups": [["param"], ["return"], ["throws"]]
+        },
+        "no_superfluous_phpdoc_tags": false,
+        "fully_qualified_strict_types": {
+            "import_symbols": true,
+            "phpdoc_tags": []
+        }
+    }
 }

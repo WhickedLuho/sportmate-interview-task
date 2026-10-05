@@ -15,7 +15,9 @@ class ListRepositoriesRequest extends FormRequest
     ];
 
     /**
-     * @return array<string, array<int, mixed>>
+     * Validate repository search, filter and allowed sorting parameters.
+     *
+     * @return array<string, array<int, mixed>> Validation rules keyed by query parameter.
      */
     public function rules(): array
     {
@@ -29,18 +31,30 @@ class ListRepositoriesRequest extends FormRequest
         ];
     }
 
+    /**
+     * Resolve the validated sorting key or use the default update-time order.
+     *
+     * @return string Allowed sorting key used by the UI and column mapping.
+     */
     public function sortKey(): string
     {
         return $this->validated('sort') ?? 'updated';
     }
 
+    /**
+     * Map the sorting key to a whitelisted database column.
+     *
+     * @return string Repository column used for ordering.
+     */
     public function sortColumn(): string
     {
         return self::SORTS[$this->sortKey()];
     }
 
     /**
-     * @return 'asc'|'desc'
+     * Resolve the requested direction or the default for the selected sort key.
+     *
+     * @return 'asc'|'desc' Validated or default sorting direction.
      */
     public function sortDirection(): string
     {
@@ -49,6 +63,11 @@ class ListRepositoriesRequest extends FormRequest
         return $direction === 'asc' ? 'asc' : 'desc';
     }
 
+    /**
+     * Check whether the request asks to include repositories marked as missing.
+     *
+     * @return bool True if the missing-repository filter is enabled.
+     */
     public function showMissing(): bool
     {
         return $this->boolean('missing');

@@ -15,9 +15,24 @@ class RepositorySyncService
 {
     private const UPSERT_CHUNK = 200;
 
+    /**
+     * Create the service with its GitHub client.
+     *
+     * @param  GitHubClient  $github  Client used to fetch repository pages.
+     */
     public function __construct(private readonly GitHubClient $github) {}
 
-    /** One page per execution. True means the queue job should be released for another page. */
+    /**
+     * Fetch, validate and persist the target's next repository page.
+     *
+     * @param  SyncTarget  $target  Target whose saved cursor determines the page.
+     * @param  string  $runId  Identifier of the repository synchronization run.
+     * @param  string  $dispatchId  Identifier of the active queue dispatch.
+     *
+     * @return bool True if another page is needed; false if finished or skipped.
+     *
+     * @throws GitHubException
+     */
     public function sync(SyncTarget $target, string $runId, string $dispatchId): bool
     {
         $target->refresh();
@@ -88,7 +103,15 @@ class RepositorySyncService
         return $saved && $page->hasNextPage;
     }
 
-    /** @param list<RepositoryData> $repositories */
+    /**
+     * Upsert a validated page and mark its repositories as seen in this run.
+     *
+     * @param  SyncTarget  $target  Target that owns the repositories.
+     * @param  list<RepositoryData>  $repositories  Validated repositories from the fetched page.
+     * @param  string  $runId  Run identifier recorded on each saved repository.
+     *
+     * @return void
+     */
     private function storePage(SyncTarget $target, array $repositories, string $runId): void
     {
         $now = now();

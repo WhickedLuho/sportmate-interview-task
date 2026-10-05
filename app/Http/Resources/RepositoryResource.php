@@ -12,7 +12,11 @@ use Illuminate\Http\Resources\Json\JsonResource;
 class RepositoryResource extends JsonResource
 {
     /**
-     * @return array<string, mixed>
+     * Expose stored repository fields and its loaded target to the UI.
+     *
+     * @param  Request  $request  Request for which the resource is serialized.
+     *
+     * @return array<string, mixed> Repository display fields and optional target data.
      */
     public function toArray(Request $request): array
     {

@@ -14,6 +14,13 @@ use Inertia\Response;
 
 class SyncTargetController extends Controller
 {
+    /**
+     * Render the signed-in user's targets with active and missing repository counts.
+     *
+     * @param  Request  $request  Request containing the authenticated user.
+     *
+     * @return Response Inertia target-list page and its display data.
+     */
     public function index(Request $request): Response
     {
         $targets = $request->user()->syncTargets()
@@ -29,6 +36,13 @@ class SyncTargetController extends Controller
         ]);
     }
 
+    /**
+     * Save a validated target under the signed-in user without contacting GitHub.
+     *
+     * @param  StoreSyncTargetRequest  $request  Request with a normalized, validated target name.
+     *
+     * @return RedirectResponse Redirect to the target list with a confirmation message.
+     */
     public function store(StoreSyncTargetRequest $request): RedirectResponse
     {
         $request->user()->syncTargets()->create($request->validated());
@@ -39,7 +53,14 @@ class SyncTargetController extends Controller
     }
 
     /**
-     * Queue a synchronization. Returns immediately; the worker does the actual work.
+     * Authorize and enqueue a new or resumed synchronization.
+     *
+     * @param  SyncTarget  $target  Target selected by the route.
+     * @param  SyncDispatchService  $dispatch  Service that atomically claims and queues the target.
+     *
+     * @return RedirectResponse Redirect to the target list with the dispatch result.
+     *
+     * @throws \Illuminate\Auth\Access\AuthorizationException
      */
     public function sync(SyncTarget $target, SyncDispatchService $dispatch): RedirectResponse
     {
@@ -58,7 +79,13 @@ class SyncTargetController extends Controller
     }
 
     /**
-     * Stop a synchronization that has not started yet (queued, or waiting for a rate limit).
+     * Authorize and stop a queued or rate-limited synchronization.
+     *
+     * @param  SyncTarget  $target  Target whose waiting dispatch should be stopped.
+     *
+     * @return RedirectResponse Redirect to the target list with the cancellation result.
+     *
+     * @throws \Illuminate\Auth\Access\AuthorizationException
      */
     public function cancel(SyncTarget $target): RedirectResponse
     {

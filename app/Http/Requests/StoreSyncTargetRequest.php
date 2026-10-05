@@ -14,8 +14,9 @@ class StoreSyncTargetRequest extends FormRequest
     private const LOGIN_PATTERN = '/^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/';
 
     /**
-     * Normalize before validating, so "@Laravel " and "laravel" count as the same
-     * account for the uniqueness check (the model also stores names lowercased).
+     * Normalize the target name before format and uniqueness validation.
+     *
+     * @return void
      */
     protected function prepareForValidation(): void
     {
@@ -25,7 +26,9 @@ class StoreSyncTargetRequest extends FormRequest
     }
 
     /**
-     * @return array<string, array<int, mixed>>
+     * Define target-name validation and uniqueness within the signed-in user.
+     *
+     * @return array<string, array<int, mixed>> Validation rules keyed by input field.
      */
     public function rules(): array
     {
@@ -40,7 +43,9 @@ class StoreSyncTargetRequest extends FormRequest
     }
 
     /**
-     * @return array<string, string>
+     * Provide readable messages for invalid or already tracked GitHub names.
+     *
+     * @return array<string, string> Custom validation messages keyed by rule.
      */
     public function messages(): array
     {

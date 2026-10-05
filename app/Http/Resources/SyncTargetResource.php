@@ -12,9 +12,11 @@ use Illuminate\Http\Resources\Json\JsonResource;
 class SyncTargetResource extends JsonResource
 {
     /**
-     * Expects the `active_repositories_count` and `missing_repositories_count` aggregates to be loaded.
+     * Expose target status, progress and preloaded repository counts to the UI.
      *
-     * @return array<string, mixed>
+     * @param  Request  $request  Request for which the resource is serialized.
+     *
+     * @return array<string, mixed> Target fields and available UI actions.
      */
     public function toArray(Request $request): array
     {

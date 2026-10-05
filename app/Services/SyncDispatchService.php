@@ -11,8 +11,22 @@ use LogicException;
 
 class SyncDispatchService
 {
+    /**
+     * Create the dispatcher with its GitHub query configuration.
+     *
+     * @param  GitHubClient  $github  Client that supplies the repository query signature.
+     */
     public function __construct(private readonly GitHubClient $github) {}
 
+    /**
+     * Claim the target and enqueue a new or resumed sync in one transaction.
+     *
+     * @param  SyncTarget  $target  Target to synchronize from its initial or saved page.
+     *
+     * @return bool True if queued; false if a synchronization is already active.
+     *
+     * @throws LogicException
+     */
     public function startOrResume(SyncTarget $target): bool
     {
         // Both writes must use the same connection; afterCommit dispatch alone has a gap.

@@ -16,6 +16,21 @@ use stdClass;
  */
 final readonly class RepositoryData
 {
+    /**
+     * Represent the repository fields used by the local application.
+     *
+     * @param  int  $externalId  Stable numeric repository identifier from GitHub.
+     * @param  string  $name  Repository name without its owner.
+     * @param  string  $fullName  Repository name prefixed by its owner.
+     * @param  string|null  $description  Repository description, when available.
+     * @param  string  $htmlUrl  Web URL of the repository.
+     * @param  string|null  $language  Primary programming language, when available.
+     * @param  int  $stargazersCount  Number of GitHub stars.
+     * @param  int  $openIssuesCount  Number of open issues, including pull requests.
+     * @param  bool  $isArchived  Whether the repository is archived.
+     * @param  CarbonImmutable|null  $externalUpdatedAt  Last update time supplied by GitHub.
+     * @param  TargetType|null  $ownerType  Recognized owner type, or null if unknown.
+     */
     public function __construct(
         public int $externalId,
         public string $name,
@@ -31,7 +46,13 @@ final readonly class RepositoryData
     ) {}
 
     /**
-     * @param  array<string, mixed>  $payload  one element of GitHub's "list repositories" response
+     * Validate a GitHub repository payload and map it to local fields.
+     *
+     * @param  array<string, mixed>  $payload  One repository object from the API response.
+     *
+     * @return self Validated repository data ready for persistence.
+     *
+     * @throws GitHubException
      */
     public static function fromApi(array $payload): self
     {
@@ -92,7 +113,16 @@ final readonly class RepositoryData
         );
     }
 
-    /** @param array<string, mixed> $payload */
+    /**
+     * Read a required string field and reject missing or blank values.
+     *
+     * @param  array<string, mixed>  $payload  API fields to inspect.
+     * @param  string  $field  Name of the required field.
+     *
+     * @return string Nonempty field value.
+     *
+     * @throws GitHubException
+     */
     private static function requiredString(array $payload, string $field): string
     {
         $value = self::nullableString($payload, $field);
@@ -103,7 +133,16 @@ final readonly class RepositoryData
         return $value;
     }
 
-    /** @param array<string, mixed> $payload */
+    /**
+     * Read an optional string field while rejecting other value types.
+     *
+     * @param  array<string, mixed>  $payload  API fields to inspect.
+     * @param  string  $field  Name of the optional field.
+     *
+     * @return string|null Field value, or null when missing or explicitly null.
+     *
+     * @throws GitHubException
+     */
     private static function nullableString(array $payload, string $field): ?string
     {
         $value = $payload[$field] ?? null;
@@ -114,7 +153,17 @@ final readonly class RepositoryData
         return $value;
     }
 
-    /** @param array<string, mixed> $payload */
+    /**
+     * Read a nonnegative integer, using the default only when the field is absent.
+     *
+     * @param  array<string, mixed>  $payload  API fields to inspect.
+     * @param  string  $field  Name of the integer field.
+     * @param  int|null  $default  Fallback for an absent field; null makes absence invalid.
+     *
+     * @return int Validated nonnegative field value.
+     *
+     * @throws GitHubException
+     */
     private static function nonNegativeInteger(array $payload, string $field, ?int $default = null): int
     {
         $value = array_key_exists($field, $payload) ? $payload[$field] : $default;
@@ -126,9 +175,9 @@ final readonly class RepositoryData
     }
 
     /**
-     * Columns of the local `repositories` table (without the target foreign key).
+     * Map the DTO to local repository columns without target or run metadata.
      *
-     * @return array<string, mixed>
+     * @return array<string, mixed> Column values used by the repository upsert.
      */
     public function toAttributes(): array
     {

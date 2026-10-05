@@ -36,7 +36,9 @@ class User extends Authenticatable implements MustVerifyEmail, PasskeyUser
     use HasFactory, Notifiable, PasskeyAuthenticatable, TwoFactorAuthenticatable;
 
     /**
-     * @return HasMany<SyncTarget, $this>
+     * Define the GitHub accounts tracked by this user.
+     *
+     * @return HasMany<SyncTarget, $this> Relationship to the user's synchronization targets.
      */
     public function syncTargets(): HasMany
     {
@@ -44,9 +46,9 @@ class User extends Authenticatable implements MustVerifyEmail, PasskeyUser
     }
 
     /**
-     * Get the attributes that should be cast.
+     * Define casts for user timestamps and automatic password hashing.
      *
-     * @return array<string, string>
+     * @return array<string, string> Attribute names mapped to their cast definitions.
      */
     protected function casts(): array
     {

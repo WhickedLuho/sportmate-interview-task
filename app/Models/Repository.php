@@ -39,7 +39,9 @@ class Repository extends Model
     use HasFactory;
 
     /**
-     * @return array<string, string>
+     * Define casts for repository flags and timestamps.
+     *
+     * @return array<string, string> Attribute names mapped to their cast definitions.
      */
     protected function casts(): array
     {
@@ -51,7 +53,9 @@ class Repository extends Model
     }
 
     /**
-     * @return BelongsTo<SyncTarget, $this>
+     * Define the target that owns this local repository record.
+     *
+     * @return BelongsTo<SyncTarget, $this> Relationship to the repository's synchronization target.
      */
     public function syncTarget(): BelongsTo
     {

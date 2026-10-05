@@ -35,6 +35,7 @@ class RepositoryListTest extends TestCase
 
     /**
      * @param  array<string, mixed>  $query
+     *
      * @return list<string>
      */
     private function names(array $query = []): array

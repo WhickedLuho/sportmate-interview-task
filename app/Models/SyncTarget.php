@@ -44,7 +44,9 @@ class SyncTarget extends Model
     use HasFactory;
 
     /**
-     * @return array<string, string>
+     * Define casts for target enums, timestamps and the saved page cursor.
+     *
+     * @return array<string, string> Attribute names mapped to their cast definitions.
      */
     protected function casts(): array
     {
@@ -60,10 +62,9 @@ class SyncTarget extends Model
     }
 
     /**
-     * GitHub logins are case-insensitive, so they are stored lowercased to keep
-     * the (user_id, name) unique constraint meaningful.
+     * Normalize GitHub logins so case-insensitive names remain unique.
      *
-     * @return Attribute<string, string>
+     * @return Attribute<string, string> Setter that trims and lowercases the target name.
      */
     protected function name(): Attribute
     {
@@ -71,11 +72,12 @@ class SyncTarget extends Model
     }
 
     /**
-     * Targets that are due for a scheduled synchronization: nothing is pending or running
-     * for them and the last attempt (successful or not) is older than the given moment.
-     * A target that was never attempted is always due.
+     * Restrict the query to inactive targets whose last attempt is old or absent.
      *
-     * @param  Builder<SyncTarget>  $query
+     * @param  Builder<SyncTarget>  $query  Target query to constrain.
+     * @param  CarbonInterface  $attemptedBefore  Inclusive cutoff for the last attempt time.
+     *
+     * @return void
      */
     #[Scope]
     protected function due(Builder $query, CarbonInterface $attemptedBefore): void
@@ -88,11 +90,11 @@ class SyncTarget extends Model
     }
 
     /**
-     * Atomically move the target to "queued", unless a sync is already pending
-     * or running. A single conditional UPDATE means two simultaneous requests
-     * cannot both win, without needing a lock.
+     * Atomically claim the target, preserving compatible progress when resuming.
      *
-     * @return bool whether this call claimed the target (and a job should be dispatched)
+     * @param  string|null  $querySignature  Query signature to match; null skips signature comparison.
+     *
+     * @return bool True if claimed; false if already active or changed during the claim.
      */
     public function markQueued(?string $querySignature = null): bool
     {
@@ -123,14 +125,9 @@ class SyncTarget extends Model
     }
 
     /**
-     * Stop a synchronization that is still waiting (queued, or paused by a rate limit).
+     * Stop waiting work while preserving the run and its committed page cursor.
      *
-     * This does not remove the job from the queue (with the database queue that would mean
-     * searching serialized payloads). The job notices on wake-up that the target is no longer
-     * pending and exits without calling GitHub. A later request keeps the saved page but
-     * gets a new dispatch id, so the old payload cannot affect the resumed synchronization.
-     *
-     * @return bool whether something was cancelled
+     * @return bool True if a queued or rate-limited target was stopped.
      */
     public function markCancelled(): bool
     {
@@ -145,11 +142,23 @@ class SyncTarget extends Model
         return $cancelled;
     }
 
+    /**
+     * Mark the target as processing and record the attempt time.
+     *
+     * @return void
+     */
     public function markSyncing(): void
     {
         $this->update(['status' => SyncStatus::Syncing, 'last_attempted_at' => now(), 'retry_at' => null]);
     }
 
+    /**
+     * Record full success and clear progress so the next sync starts at page one.
+     *
+     * @param  TargetType|null  $type  Discovered account type; null preserves the current type.
+     *
+     * @return void
+     */
     public function markSynced(?TargetType $type): void
     {
         $this->update([
@@ -165,24 +174,47 @@ class SyncTarget extends Model
         ]);
     }
 
-    /** A transient failure: the job will run again, so the target goes back to "queued". */
+    /**
+     * Return the target to queued status after a transient failure.
+     *
+     * @param  string  $message  User-safe failure message stored on the target.
+     *
+     * @return void
+     */
     public function markRetrying(string $message): void
     {
         $this->update(['status' => SyncStatus::Queued, 'retry_at' => null, 'last_error' => $message]);
     }
 
+    /**
+     * Record a rate-limit pause and its scheduled retry time.
+     *
+     * @param  string  $message  User-safe rate-limit message.
+     * @param  CarbonInterface  $retryAt  Time when the job is scheduled to retry.
+     *
+     * @return void
+     */
     public function markRateLimited(string $message, CarbonInterface $retryAt): void
     {
         $this->update(['status' => SyncStatus::RateLimited, 'retry_at' => $retryAt, 'last_error' => $message]);
     }
 
+    /**
+     * Record a failed synchronization and clear any scheduled retry time.
+     *
+     * @param  string  $message  User-safe failure message stored on the target.
+     *
+     * @return void
+     */
     public function markFailed(string $message): void
     {
         $this->update(['status' => SyncStatus::Failed, 'retry_at' => null, 'last_error' => $message]);
     }
 
     /**
-     * @return BelongsTo<User, $this>
+     * Define the target's owning user relationship.
+     *
+     * @return BelongsTo<User, $this> Relationship to the user who added the target.
      */
     public function user(): BelongsTo
     {
@@ -190,7 +222,9 @@ class SyncTarget extends Model
     }
 
     /**
-     * @return HasMany<Repository, $this>
+     * Define the repositories stored under this target.
+     *
+     * @return HasMany<Repository, $this> Relationship to the target's local repositories.
      */
     public function repositories(): HasMany
     {

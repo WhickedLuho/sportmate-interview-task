@@ -12,6 +12,11 @@ use RuntimeException;
  */
 class GitHubException extends RuntimeException
 {
+    /**
+     * Provide a user-safe message without exposing technical exception details.
+     *
+     * @return string Message suitable for the target's latest error and UI.
+     */
     public function userMessage(): string
     {
         return 'GitHub returned an unexpected response.';

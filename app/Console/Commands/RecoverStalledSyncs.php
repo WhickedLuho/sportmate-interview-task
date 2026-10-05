@@ -15,6 +15,11 @@ class RecoverStalledSyncs extends Command
 
     protected $description = 'Make pending synchronizations without a queue entry resumable';
 
+    /**
+     * Make old pending targets resumable when their matching queue entry is missing.
+     *
+     * @return int Command exit code; zero on successful completion.
+     */
     public function handle(): int
     {
         $recovered = 0;

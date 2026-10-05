@@ -133,6 +133,18 @@ documentation directory, paused queue/scheduler, migrated and restarted them. A 
 was then started through the normal dispatch service: pages were stored incrementally, and all 84 pages completed
 with 8,340 repositories, a successful synchronization timestamp, no target error and no remaining queue jobs.
 
+## Method documentation cleanup (2026-10-03)
+
+I asked Codex to review the method docblocks and propose a plan before editing. After approval, Codex updated
+77 method docblocks across 24 application files with concise summaries, parameter types and descriptions,
+return values and exception types. Parameter, return and exception sections are separated by blank lines.
+Pint's PHPDoc rules were adjusted to preserve this format; two existing test helper docblocks received matching
+section spacing.
+
+Pint checked all 101 PHP files successfully, PHPStan reported no errors, and formatting of `pint.json` and Git
+diff whitespace checks passed. PHP token comparisons against HEAD confirmed that executable code in all
+26 changed PHP files was unchanged. PHPUnit and browser checks were not repeated for this documentation-only pass.
+
 ## Remaining limits and responsibility
 
 The code and README document compromises rather than treating AI-generated output as production-ready. In particular:

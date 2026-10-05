@@ -12,6 +12,13 @@ class RepositoryController extends Controller
 {
     private const PER_PAGE = 25;
 
+    /**
+     * Render the user's local repositories with validated filters and pagination.
+     *
+     * @param  ListRepositoriesRequest  $request  Request containing validated search and sort options.
+     *
+     * @return Response Inertia repository page with rows, filters and filter choices.
+     */
     public function index(ListRepositoriesRequest $request): Response
     {
         $user = $request->user();

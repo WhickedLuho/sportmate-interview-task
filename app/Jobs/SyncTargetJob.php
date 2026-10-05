@@ -34,35 +34,66 @@ class SyncTargetJob implements ShouldQueue
 
     public ?string $dispatchId = null;
 
+    /**
+     * Capture the target and the identifiers of its active dispatch.
+     *
+     * @param  SyncTarget  $target  Target claimed before this job is queued.
+     */
     public function __construct(public SyncTarget $target)
     {
         $this->runId = $target->sync_run_id;
         $this->dispatchId = $target->dispatch_id;
     }
 
+    /**
+     * Identify the target and dispatch in the queue payload and worker output.
+     *
+     * @return string Queue job name containing the target and dispatch identifiers.
+     */
     public function displayName(): string
     {
         return 'SyncTargetJob:'.$this->target->id.':'.($this->dispatchId ?? 'legacy');
     }
 
-    /** @return list<WithoutOverlapping> */
+    /**
+     * Prevent concurrent jobs from processing the same target.
+     *
+     * @return list<WithoutOverlapping> Target-level overlap middleware.
+     */
     public function middleware(): array
     {
         return [(new WithoutOverlapping('sync-target:'.$this->target->id))->releaseAfter(1)->expireAfter(75)];
     }
 
-    /** Captured once in the payload, preserved on every release. */
+    /**
+     * Provide the deadline serialized once when the job is queued.
+     *
+     * @return \DateTimeInterface Retry deadline preserved across page and rate-limit releases.
+     */
     public function retryUntil(): \DateTimeInterface
     {
         return now()->addHours(2);
     }
 
-    /** Successful pages also count as attempts, so backoff is not attempt-indexed. */
+    /**
+     * Use a fixed delay because successful page releases also count as attempts.
+     *
+     * @return int Seconds to wait before retrying an unhandled failure.
+     */
     public function backoff(): int
     {
         return 30;
     }
 
+    /**
+     * Process one page and release the job when more work or a rate-limit wait is needed.
+     *
+     * @param  RepositorySyncService  $sync  Service that fetches and persists the next page.
+     *
+     * @return void
+     *
+     * @throws GitHubUnavailableException
+     */
     public function handle(RepositorySyncService $sync): void
     {
         $this->target->refresh();
@@ -107,6 +138,13 @@ class SyncTargetJob implements ShouldQueue
         }
     }
 
+    /**
+     * Record a terminal failure only if this dispatch is still active.
+     *
+     * @param  Throwable  $exception  Failure reported by the queue worker.
+     *
+     * @return void
+     */
     public function failed(Throwable $exception): void
     {
         $this->logFailure($exception);
@@ -115,6 +153,11 @@ class SyncTargetJob implements ShouldQueue
             : 'The synchronization failed unexpectedly. Please try again later.');
     }
 
+    /**
+     * Check whether this job still belongs to the target's active synchronization.
+     *
+     * @return bool True if both identifiers match and the target is in progress.
+     */
     private function isCurrent(): bool
     {
         return $this->runId !== null && $this->dispatchId !== null
@@ -122,6 +165,13 @@ class SyncTargetJob implements ShouldQueue
             && $this->target->status->isInProgress();
     }
 
+    /**
+     * Check a proposed retry time against the original queue deadline.
+     *
+     * @param  \DateTimeInterface  $retryAt  Proposed time for the next execution.
+     *
+     * @return bool True if no deadline is set or the retry precedes it.
+     */
     private function canRetryAt(\DateTimeInterface $retryAt): bool
     {
         $deadline = $this->job?->retryUntil();
@@ -129,7 +179,15 @@ class SyncTargetJob implements ShouldQueue
         return $deadline === null || $retryAt->getTimestamp() < $deadline;
     }
 
-    /** Failures can happen before handle(), so the callback must also be fenced. */
+    /**
+     * Update status and error details only for the still-active dispatch.
+     *
+     * @param  SyncStatus  $status  Status to record on the target.
+     * @param  string  $message  User-safe error message to display.
+     * @param  \DateTimeInterface|null  $retryAt  Scheduled retry time, or null to clear it.
+     *
+     * @return bool True if the active target was updated; false if superseded or stopped.
+     */
     private function recordState(SyncStatus $status, string $message, ?\DateTimeInterface $retryAt = null): bool
     {
         if ($this->runId === null || $this->dispatchId === null) {
@@ -142,6 +200,13 @@ class SyncTargetJob implements ShouldQueue
             ->update(['status' => $status, 'last_error' => $message, 'retry_at' => $retryAt, 'updated_at' => now()]) === 1;
     }
 
+    /**
+     * Log a failure with target, page and dispatch details for debugging.
+     *
+     * @param  Throwable  $exception  Exception whose type and technical message are logged.
+     *
+     * @return void
+     */
     private function logFailure(Throwable $exception): void
     {
         Log::warning('GitHub synchronization failed.', [

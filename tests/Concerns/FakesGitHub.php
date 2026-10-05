@@ -15,6 +15,7 @@ trait FakesGitHub
      * One repository as GitHub's API describes it.
      *
      * @param  array<string, mixed>  $overrides
+     *
      * @return array<string, mixed>
      */
     protected function githubRepository(int $id = 1, string $name = 'framework', array $overrides = []): array
